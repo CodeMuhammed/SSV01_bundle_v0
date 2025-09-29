@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import binascii
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 from .tapscript import tagged_sha256
 
@@ -54,4 +54,3 @@ def compute_output_key_xonly(internal_xonly: bytes, leaf_hash: bytes, nodes: Lis
 
 def scriptpubkey_from_xonly(xonly_q: bytes) -> bytes:
     return b"\x51\x20" + xonly_q
-
