@@ -23,6 +23,7 @@ from .tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disas
 from .verify import verify_taproot_path
 from .hexutil import parse_hex, file_or_hex, is_hex_str
 from .policy import PolicyParams
+from .psbtio import load_psbt_from_file, write_psbt, to_raw_tx_hex, cscript_witness, get_input_witness_spk_hex
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -40,10 +41,7 @@ def cmd_build(args: argparse.Namespace) -> None:
 
 def finalize_witness(args: argparse.Namespace) -> None:
     try:
-        import importlib
-        PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
-        CScriptWitness = importlib.import_module('bitcointx.core.script').CScriptWitness
-        b2x = importlib.import_module('bitcointx.core').b2x
+        CScriptWitness = cscript_witness()
     except Exception:
         print("ERROR: finalize requires python-bitcointx. Install with: pip install python-bitcointx", file=sys.stderr)
         raise
@@ -61,16 +59,8 @@ def finalize_witness(args: argparse.Namespace) -> None:
     control = file_or_hex('control', args.control, getattr(args, 'control_file', None))
     sig = parse_hex('sig', args.sig)
 
-    # Load PSBT (base64 or hex file contents)
-    import base64
-    with open(args.psbt_in, 'rt') as f:
-        s = f.read().strip()
-    if is_hex_str(s):
-        raw = binascii.unhexlify(s)
-        psbt_b64 = base64.b64encode(raw).decode()
-    else:
-        psbt_b64 = s
-    psbt = PSBT.from_base64(psbt_b64)
+    # Load PSBT (auto-detect hex or base64)
+    psbt = load_psbt_from_file(args.psbt_in)
 
     if args.input_index < 0 or args.input_index >= len(psbt.inputs):
         raise IndexError(f"Input index {args.input_index} out of range")
@@ -93,14 +83,13 @@ def finalize_witness(args: argparse.Namespace) -> None:
     if hasattr(pi, 'taproot_internal_key'):
         pi.taproot_internal_key = None
 
-    with open(args.psbt_out, 'wt') as f:
-        f.write(psbt.to_base64())
+    write_psbt(psbt, args.psbt_out)
 
     if args.tx_out:
         try:
-            tx = psbt.to_tx()
+            raw = to_raw_tx_hex(psbt)
             with open(args.tx_out, 'wt') as f:
-                f.write(b2x(tx.serialize()))
+                f.write(raw)
         except Exception as e:
             print(f"Note: could not produce raw tx: {e}", file=sys.stderr)
             print("Finalized PSBT written; broadcast via bitcoin-cli.", file=sys.stderr)
@@ -153,7 +142,7 @@ def main():
     ap_v.add_argument('--witness-spk', help='witness scriptPubKey hex (v1 segwit taproot)')
     ap_v.add_argument('--psbt-in', help='optional PSBT (base64 or hex) to extract witness_utxo spk from input 0')
     def cmd_verify(args: argparse.Namespace) -> None:
-        import base64, binascii
+        import binascii
         taps_hex = file_or_hex('tapscript', args.tapscript, args.tapscript_file).hex()
         ctrl_hex = file_or_hex('control', args.control, args.control_file).hex()
         from typing import Optional
@@ -161,21 +150,11 @@ def main():
         psbt_in: Optional[str] = args.psbt_in
         if spk_hex is None and psbt_in is not None:
             try:
-                import importlib
-                PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+                psbt = load_psbt_from_file(psbt_in)
             except Exception:
                 print('Install python-bitcointx to read PSBTs for verification', file=sys.stderr)
                 raise
-            with open(psbt_in,'rt') as f:
-                s = f.read().strip()
-            if is_hex_str(s):
-                raw = binascii.unhexlify(s)
-                s = base64.b64encode(raw).decode()
-            psbt = PSBT.from_base64(s)
-            iu = psbt.inputs[0].witness_utxo
-            if not iu:
-                raise ValueError('PSBT input 0 missing witness_utxo')
-            spk_hex = iu.scriptPubKey.hex()
+            spk_hex = get_input_witness_spk_hex(psbt, 0)
         if spk_hex is None:
             raise ValueError('Provide --witness-spk or --psbt-in')
         res = verify_taproot_path(taps_hex, ctrl_hex, spk_hex)
