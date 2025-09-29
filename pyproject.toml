@@ -8,8 +8,17 @@ version = "0.1.0"
 description = "SSV Taproot vault toolkit (lean): tapscript build, PSBT finalize"
 requires-python = ">=3.9"
 dependencies = [
-  "python-bitcointx",
+  "python-bitcointx>=1.1.0",
 ]
 
 [project.scripts]
 ssv = "ssv.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-cov>=4",
+  # optional for full test coverage; tests skip when absent
+  "coincurve; platform_python_implementation != 'PyPy'",
+  "python-bitcointx>=1.1.0",
+]

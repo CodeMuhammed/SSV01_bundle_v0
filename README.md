@@ -42,8 +42,8 @@ End‑to‑end summary
 4) If no repay by deadline: provider LIQUIDATE after `csv_blocks` via the CSV branch to claim BTC.
 
 CLI quick start (docker)
-- Build tapscript:
-  `docker compose exec ssv ssv build-tapscript --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --disasm`
+- Build tapscript (human output or JSON with --json):
+  `docker compose exec ssv ssv build-tapscript --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --disasm [--json]`
 - Finalize PSBT (borrower):
   `docker compose exec ssv ssv finalize --mode borrower --psbt-in close.psbt --psbt-out close.final.psbt --tx-out close.final.tx --sig \`SIG_B\` --preimage \`s\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
 - Finalize PSBT (provider):
@@ -68,9 +68,9 @@ CSV encoding (quick ref)
 - Example: `csv_blocks = 144` → nSequence = `0x00000090`; tx version must be ≥ 2.
 
 Path verification (optional)
-- Verify tapscript/control against the witness UTXO scriptPubKey:
-  - With PSBT: `docker compose exec ssv ssv verify-path --tapscript-file tapscript.hex --control-file control.hex --psbt-in input.psbt`
-  - Or direct SPK: `docker compose exec ssv ssv verify-path --tapscript <HEX> --control <HEX> --witness-spk <HEX>`
+- Verify tapscript/control against the witness UTXO scriptPubKey (human output or JSON with --json):
+  - With PSBT: `docker compose exec ssv ssv verify-path --tapscript-file tapscript.hex --control-file control.hex --psbt-in input.psbt [--json]`
+  - Or direct SPK: `docker compose exec ssv ssv verify-path --tapscript <HEX> --control <HEX> --witness-spk <HEX> [--json]`
 - Output shows ok / expected_spk / actual_spk and a reason on mismatch.
 
 Demos (docker, regtest)
@@ -155,6 +155,15 @@ Troubleshooting
 - Control block and signatures come from your signing wallet when preparing the Taproot script‑path spend.
 
 
+Developer notes (modules and helpers)
+- ssv.tapscript: tapscript builder for the two-branch policy; tapleaf hashing; disasm.
+- ssv.policy: PolicyParams dataclass + validate() for input invariants.
+- ssv.taproot: Taproot helpers (parse control block, compute output key, scriptPubKey build).
+- ssv.psbtio: PSBT load/write utilities (hex/base64 auto-detect), raw tx conversion, witness_utxo SPK extraction.
+- ssv.witness: witness stack builder with Branch enum (CLOSE / LIQUIDATE) and IF/ELSE selectors.
+
+
+
 Dockerized setup (reproducible)
 
 If you prefer to run everything in containers (bitcoind + SSV + rgb CLI), use the provided Dockerfile and docker-compose.yml.
@@ -175,3 +184,14 @@ Notes
 - The `ssv` container image includes Python deps and the `rgb` CLI (compiled via Cargo) so you can attach RGB anchors inside the same container.
 - The `bitcoin` service uses regtest with txindex and default RPC auth (see docker-compose.yml). Adjust RPC options as needed.
 - Example scripts still require manual signatures and a control block obtained from your signing wallet.
+
+
+Development and tests
+- Create a virtualenv and install dev extras:
+  - `python3 -m venv .venv && source .venv/bin/activate`
+  - `pip install -r requirements-dev.txt`  # installs editable package with dev deps
+  - Alternatively: `pip install -e '.[dev]'`
+  - Note: python-bitcointx is pinned (>=1.1.0) to ensure PSBT API availability for tests.
+- Run tests: `make test` (or `pytest -q`)
+- Editor (VS Code/Pylance): select the same virtualenv interpreter so pytest/coincurve are resolved and import warnings disappear.
+- Some tests are skipped if optional deps are not installed (coincurve, python-bitcointx).

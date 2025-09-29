@@ -1,0 +1,19 @@
+# Virtual environments
+.venv/
+
+# Python cache and artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+.python-version
+coverage.xml
+.coverage*
+htmlcov/
