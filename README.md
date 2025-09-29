@@ -41,13 +41,13 @@ End‑to‑end summary
 3) Repay and Close (preferred): single anchor tx that spends the vault via CLOSE (reveals `s`) and anchors RGB REPAY (verifies `sha256(s)=h` and pays provider ≥ principal+interest); BTC returns to borrower.
 4) If no repay by deadline: provider LIQUIDATE after `csv_blocks` via the CSV branch to claim BTC.
 
-CLI quick start
+CLI quick start (docker)
 - Build tapscript:
-  `python -m ssv.cli build-tapscript --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --disasm`
+  `docker compose exec ssv ssv build-tapscript --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --disasm`
 - Finalize PSBT (borrower):
-  `python -m ssv.cli finalize --mode borrower --psbt-in close.psbt --psbt-out close.final.psbt --tx-out close.final.tx --sig \`SIG_B\` --preimage \`s\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
+  `docker compose exec ssv ssv finalize --mode borrower --psbt-in close.psbt --psbt-out close.final.psbt --tx-out close.final.tx --sig \`SIG_B\` --preimage \`s\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
 - Finalize PSBT (provider):
-  `python -m ssv.cli finalize --mode provider --psbt-in liq.psbt --psbt-out liq.final.psbt --tx-out liq.final.tx --sig \`SIG_P\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
+  `docker compose exec ssv ssv finalize --mode provider --psbt-in liq.psbt --psbt-out liq.final.psbt --tx-out liq.final.tx --sig \`SIG_P\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
 
 Implementation notes (concise)
 - RGB coupling: DISBURSE (provider→borrower), REPAY (borrower→provider). Co‑anchor REPAY with CLOSE and check `sha256(s)=h`. CSV liquidation is L1 only.
@@ -68,20 +68,18 @@ CSV encoding (quick ref)
 - Example: `csv_blocks = 144` → nSequence = `0x00000090`; tx version must be ≥ 2.
 
 Path verification (optional)
-- Verify tapscript/control against the witness UTXO scriptPubKey (requires coincurve):
-  - With PSBT: `python -m ssv.cli verify-path --tapscript-file tapscript.hex --control-file control.hex --psbt-in input.psbt`
-  - Or direct SPK: `python -m ssv.cli verify-path --tapscript <HEX> --control <HEX> --witness-spk <HEX>`
+- Verify tapscript/control against the witness UTXO scriptPubKey:
+  - With PSBT: `docker compose exec ssv ssv verify-path --tapscript-file tapscript.hex --control-file control.hex --psbt-in input.psbt`
+  - Or direct SPK: `docker compose exec ssv ssv verify-path --tapscript <HEX> --control <HEX> --witness-spk <HEX>`
 - Output shows ok / expected_spk / actual_spk and a reason on mismatch.
 
-Demos (regtest)
+Demos (docker, regtest)
 - CLOSE+REPAY skeleton (prompts to attach RGB anchor): `make demo-close`
 - CSV LIQUIDATE skeleton: `make demo-liq`
-- Prereqs: bitcoind -regtest running; wallets vault/borrower/provider loaded; `jq` installed.
+- Use `make docker-up` first to start containers; `make docker-logs` to tail Core logs.
 
 Verify-path dependency
-- The `verify-path` subcommand requires `coincurve`:
-  - `pip install coincurve`
-- Without it, the command returns `ok=null` and prints a helpful message.
+- The `ssv` container includes coincurve; `verify-path` works out of the box.
 
 Appendix
 
@@ -97,32 +95,30 @@ tr(
 ```
 Use Core’s `getdescriptorinfo` to checksum/canonicalize, then `importdescriptors` into the vault wallet.
 
-Key derivation tips (Core)
+Key derivation tips (Core via docker)
 - Internal key (`internal_pub`) for tr():
-  - `VAULT_ADDR=$(bitcoin-cli -regtest -rpcwallet=vault getnewaddress "" bech32m)`
-  - `INTERNAL_PUB=$(bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | jq -r .pubkey)`  # 33‑byte compressed
+  - `VAULT_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getnewaddress "" bech32m)`
+  - `INTERNAL_PUB=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | jq -r .pubkey)`  # 33‑byte compressed
 - X‑only keys for tapscript pk():
-  - Borrower: `BORR_ADDR=$(bitcoin-cli -regtest -rpcwallet=borrower getnewaddress "" bech32m)`
-  - `BORR_COMP=$(bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | jq -r .pubkey)`
+  - Borrower: `BORR_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getnewaddress "" bech32m)`
+  - `BORR_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | jq -r .pubkey)`
   - `pk_b=${BORR_COMP:2}`  # drop leading 02/03 to get 32‑byte x‑only
-  - Provider: `PROV_ADDR=$(bitcoin-cli -regtest -rpcwallet=provider getnewaddress "" bech32m)`
-  - `PROV_COMP=$(bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | jq -r .pubkey)`
+  - Provider: `PROV_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getnewaddress "" bech32m)`
+  - `PROV_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | jq -r .pubkey)`
   - `pk_p=${PROV_COMP:2}`
 Notes: tr() uses the 33‑byte internal compressed pubkey; tapscript pk() uses 32‑byte x‑only keys.
 
-No jq? Alternatives
+No jq? Alternatives (via docker)
 - Python one‑liner (recommended):
-  - Internal: `INTERNAL_PUB=$(bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
-  - Borrower: `BORR_COMP=$(bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
-  - Provider: `PROV_COMP=$(bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
-- Pure shell (quick & brittle JSON grep):
-  - `INTERNAL_PUB=$(bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | grep -o '"pubkey": *"[^"]*"' | cut -d'"' -f4)`
+  - Internal: `INTERNAL_PUB=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
+  - Borrower: `BORR_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
+  - Provider: `PROV_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
 
 Helper script
-- Derive keys conveniently from loaded wallets:
-  - `python tools/derive_keys.py --all`  # vault/borrower/provider (new bech32m addresses)
-  - `python tools/derive_keys.py --wallet vault --new`
-  - `python tools/derive_keys.py --wallet borrower --address <BECH32M>`
+- Derive keys conveniently from loaded wallets via the container:
+  - `docker compose exec -T ssv python tools/derive_keys.py --all`  # vault/borrower/provider (new bech32m addresses)
+  - `docker compose exec -T ssv python tools/derive_keys.py --wallet vault --new`
+  - `docker compose exec -T ssv python tools/derive_keys.py --wallet borrower --address <BECH32M>`
 
 Compute preimage and hash (s and h)
 - Random 32‑byte preimage `s` and its SHA‑256 `h` (bash + OpenSSL):
@@ -132,3 +128,50 @@ Compute preimage and hash (s and h)
   - `python - <<'PY'\nimport os,hashlib; s=os.urandom(32).hex(); h=hashlib.sha256(bytes.fromhex(s)).hexdigest(); print('s=',s); print('h=',h)\nPY`
 - Use `h` when building the tapscript and keep `s` for CLOSE (borrower path).
 
+
+Docker usage (step‑by‑step)
+
+Use Docker for a reproducible setup with bitcoind (regtest), SSV, and rgb.
+
+1) Build and start containers
+- `make docker-up`
+- `make docker-logs` to tail Core logs (Ctrl+C to stop tailing)
+
+2) Run the CLOSE+REPAY demo skeleton
+- `make demo-close`
+- The script will:
+  - Create vault/borrower/provider wallets in bitcoind
+  - Derive keys via the ssv container
+  - Build tapscript, import descriptor, and fund the vault
+  - Pause to let you anchor RGB REPAY using `docker compose exec ssv rgb ...`
+  - Finalize borrower witness with `ssv finalize`
+
+3) CSV LIQUIDATION demo
+- `make demo-liq` to run the provider path after CSV blocks elapse
+
+Troubleshooting
+- Ensure PSBTs include `witness_utxo` (use walletprocesspsbt if necessary).
+- CSV spends require tx version ≥ 2 and input nSequence=CSV.
+- Control block and signatures come from your signing wallet when preparing the Taproot script‑path spend.
+
+
+Dockerized setup (reproducible)
+
+If you prefer to run everything in containers (bitcoind + SSV + rgb CLI), use the provided Dockerfile and docker-compose.yml.
+
+Quick start
+- Build and start: `make docker-up`
+- Tail bitcoind logs: `make docker-logs`
+- Run CLOSE+REPAY demo (dockerized helpers):
+  - `bash examples/close_repay_demo_docker.sh`
+  - The script uses:
+    - `docker compose exec bitcoin bitcoin-cli ...` for Core RPC calls, and
+    - `docker compose exec ssv ssv ...` / `docker compose exec ssv python ...` for SSV and helpers.
+- Run CSV LIQUIDATE demo (dockerized):
+  - `bash examples/liq_demo_docker.sh`
+- Stop containers: `make docker-down`
+
+Notes
+- The `ssv` container image includes Python deps and the `rgb` CLI (compiled via Cargo) so you can attach RGB anchors inside the same container.
+- The `bitcoin` service uses regtest with txindex and default RPC auth (see docker-compose.yml). Adjust RPC options as needed.
+- Example scripts still require manual signatures and a control block obtained from your signing wallet.

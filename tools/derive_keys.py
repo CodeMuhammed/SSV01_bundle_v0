@@ -16,10 +16,16 @@ Notes
 - Requires bitcoin-cli and loaded wallets (vault/borrower/provider) on regtest.
 - Outputs JSON with: wallet, address, pubkey_compressed (33B hex), xonly (32B hex).
 """
-import argparse, json, subprocess, sys
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from typing import Any, Dict, Optional, Sequence
 
 
-def run_cli(args: list[str]) -> str:
+def run_cli(args: Sequence[str]) -> str:
     try:
         return subprocess.check_output(args, stderr=subprocess.STDOUT).decode().strip()
     except subprocess.CalledProcessError as e:
@@ -27,7 +33,7 @@ def run_cli(args: list[str]) -> str:
         raise
 
 
-def get_address_info(wallet: str, address: str, network: str) -> dict:
+def get_address_info(wallet: str, address: str, network: str) -> Dict[str, Any]:
     cli = ["bitcoin-cli", f"-{network}", f"-rpcwallet={wallet}", "getaddressinfo", address]
     out = run_cli(cli)
     return json.loads(out)
@@ -45,10 +51,7 @@ def compress_to_xonly(pubkey_hex: str) -> str:
     return pubkey_hex[2:]
 
 
-from typing import Optional
-
-
-def derive_for_wallet(wallet: str, address: Optional[str], network: str) -> dict:
+def derive_for_wallet(wallet: str, address: Optional[str], network: str) -> Dict[str, str]:
     if not address:
         address = get_new_address(wallet, network)
     info = get_address_info(wallet, address, network)
@@ -73,7 +76,7 @@ def main():
     args = ap.parse_args()
 
     if args.all:
-        results = []
+        results: list[Dict[str, str]] = []
         for w in ("vault", "borrower", "provider"):
             results.append(derive_for_wallet(w, None, args.network))
         print(json.dumps(results, indent=2))

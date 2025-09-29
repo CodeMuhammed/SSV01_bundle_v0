@@ -15,20 +15,19 @@ Notes
 - Control block and signatures come from your wallet/descriptor engine.
 - pk_b/pk_p are x-only; descriptor enforces the policy on-chain.
 """
-import argparse, sys, binascii
+import argparse
+import sys
+import binascii
 
 from .tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disasm
 from .verify import verify_taproot_path
+from .hexutil import parse_hex, file_or_hex, is_hex_str
+from .policy import PolicyParams
 
 
-def h2b(name, s):
-    try:
-        return binascii.unhexlify(s)
-    except Exception:
-        raise ValueError(f"Invalid hex for {name}")
-
-
-def cmd_build(args):
+def cmd_build(args: argparse.Namespace) -> None:
+    # validate via PolicyParams for clearer errors
+    PolicyParams(args.hash_h, args.borrower_pk, args.provider_pk, args.csv_blocks).validate()
     script = build_tapscript(args.hash_h, args.borrower_pk, args.csv_blocks, args.provider_pk)
     leaf_simple = tapleaf_hash(script)
     leaf_tagged = tapleaf_hash_tagged(script)
@@ -39,42 +38,33 @@ def cmd_build(args):
         print("disasm        =", disasm(script))
 
 
-def finalize_witness(args):
+def finalize_witness(args: argparse.Namespace) -> None:
     try:
-        from bitcointx.core.psbt import PSBT
-        from bitcointx.core.script import CScriptWitness
-        from bitcointx.core import b2x
+        import importlib
+        PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+        CScriptWitness = importlib.import_module('bitcointx.core.script').CScriptWitness
+        b2x = importlib.import_module('bitcointx.core').b2x
     except Exception:
         print("ERROR: finalize requires python-bitcointx. Install with: pip install python-bitcointx", file=sys.stderr)
         raise
 
     # tapscript can come from hex or file, else we build
-    if args.tapscript:
-        tapscript = h2b('tapscript', args.tapscript)
-    elif getattr(args, 'tapscript_file', None):
-        with open(args.tapscript_file, 'rt') as f:
-            tapscript = h2b('tapscript_file', f.read().strip())
+    if args.tapscript or getattr(args, 'tapscript_file', None):
+        tapscript = file_or_hex('tapscript', args.tapscript, getattr(args, 'tapscript_file', None))
     else:
         if not (args.hash_h and args.borrower_pk and args.csv_blocks and args.provider_pk):
-            raise ValueError("Either --tapscript or (--hash-h --borrower-pk --csv-blocks --issuer-pk) must be supplied")
+            raise ValueError("Either --tapscript[(-file)] or (--hash-h --borrower-pk --csv-blocks --provider-pk) must be supplied")
+        PolicyParams(args.hash_h, args.borrower_pk, args.provider_pk, args.csv_blocks).validate()
         tapscript = build_tapscript(args.hash_h, args.borrower_pk, args.csv_blocks, args.provider_pk)
 
     # control block from hex or file
-    control_hex = args.control
-    if not control_hex and getattr(args, 'control_file', None):
-        with open(args.control_file, 'rt') as f:
-            control_hex = f.read().strip()
-    if not control_hex:
-        raise ValueError("Control block required: provide --control or --control-file")
-    control = h2b('control', control_hex)
-    sig = h2b('sig', args.sig)
+    control = file_or_hex('control', args.control, getattr(args, 'control_file', None))
+    sig = parse_hex('sig', args.sig)
 
     # Load PSBT (base64 or hex file contents)
-    import base64, re
+    import base64
     with open(args.psbt_in, 'rt') as f:
         s = f.read().strip()
-    def is_hex_str(x: str) -> bool:
-        return re.fullmatch(r'[0-9a-fA-F]+', x) is not None
     if is_hex_str(s):
         raw = binascii.unhexlify(s)
         psbt_b64 = base64.b64encode(raw).decode()
@@ -88,7 +78,7 @@ def finalize_witness(args):
     if args.mode == 'borrower':
         if not args.preimage:
             raise ValueError("--preimage required in borrower mode")
-        preimage = h2b('preimage', args.preimage)
+        preimage = parse_hex('preimage', args.preimage)
         stack_items = [sig, preimage, b'\x01', tapscript, control]
     else:
         stack_items = [sig, b'\x00', tapscript, control]
@@ -162,27 +152,22 @@ def main():
     ap_v.add_argument('--control-file', help='read control block hex from file')
     ap_v.add_argument('--witness-spk', help='witness scriptPubKey hex (v1 segwit taproot)')
     ap_v.add_argument('--psbt-in', help='optional PSBT (base64 or hex) to extract witness_utxo spk from input 0')
-    def cmd_verify(args):
-        import base64, binascii, re
-        def read_hex_arg(name, val, fpath):
-            if val: return val.strip()
-            if fpath:
-                with open(fpath, 'rt') as f:
-                    return f.read().strip()
-            raise ValueError(f"{name} required")
-        taps_hex = read_hex_arg('tapscript', args.tapscript, args.tapscript_file)
-        ctrl_hex = read_hex_arg('control', args.control, args.control_file)
-        spk_hex = args.witness_spk
-        if not spk_hex and args.psbt_in:
+    def cmd_verify(args: argparse.Namespace) -> None:
+        import base64, binascii
+        taps_hex = file_or_hex('tapscript', args.tapscript, args.tapscript_file).hex()
+        ctrl_hex = file_or_hex('control', args.control, args.control_file).hex()
+        from typing import Optional
+        spk_hex: Optional[str] = args.witness_spk
+        psbt_in: Optional[str] = args.psbt_in
+        if spk_hex is None and psbt_in is not None:
             try:
-                from bitcointx.core.psbt import PSBT
+                import importlib
+                PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
             except Exception:
                 print('Install python-bitcointx to read PSBTs for verification', file=sys.stderr)
                 raise
-            with open(args.psbt_in,'rt') as f:
+            with open(psbt_in,'rt') as f:
                 s = f.read().strip()
-            def is_hex_str(x: str) -> bool:
-                return re.fullmatch(r'[0-9a-fA-F]+', x) is not None
             if is_hex_str(s):
                 raw = binascii.unhexlify(s)
                 s = base64.b64encode(raw).decode()
@@ -191,7 +176,7 @@ def main():
             if not iu:
                 raise ValueError('PSBT input 0 missing witness_utxo')
             spk_hex = iu.scriptPubKey.hex()
-        if not spk_hex:
+        if spk_hex is None:
             raise ValueError('Provide --witness-spk or --psbt-in')
         res = verify_taproot_path(taps_hex, ctrl_hex, spk_hex)
         ok = res.get('ok')

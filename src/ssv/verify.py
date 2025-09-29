@@ -1,5 +1,13 @@
+"""
+Taproot path verification utilities.
+
+Given a tapscript hex and a control block, recompute the expected Taproot
+output scriptPubKey and compare with an actual witness_utxo spk.
+"""
+from __future__ import annotations
+
 import binascii
-from typing import Tuple, List
+from typing import Tuple, List, Optional, TypedDict
 
 from .tapscript import tapleaf_hash_tagged, tagged_sha256
 
@@ -15,9 +23,19 @@ def _parse_control_block(cb_hex: str) -> Tuple[int, bytes, List[bytes]]:
     return leaf_ver, xonly, nodes
 
 
-def verify_taproot_path(tapscript_hex: str, control_block_hex: str, witness_spk_hex: str) -> dict:
+class VerifyResult(TypedDict):
+    ok: Optional[bool]
+    expected_spk: Optional[str]
+    actual_spk: str
+    reason: Optional[str]
+
+
+def verify_taproot_path(tapscript_hex: str, control_block_hex: str, witness_spk_hex: str) -> VerifyResult:
     try:
-        from coincurve import PublicKey, PrivateKey
+        import importlib
+        _cc = importlib.import_module('coincurve')
+        PublicKey = getattr(_cc, 'PublicKey')
+        PrivateKey = getattr(_cc, 'PrivateKey')
     except Exception as e:
         return {
             'ok': None,
@@ -38,14 +56,14 @@ def verify_taproot_path(tapscript_hex: str, control_block_hex: str, witness_spk_
 
     tweak = tagged_sha256('TapTweak', xonly + leaf)
     t_int = int.from_bytes(tweak, 'big')
-    # Build Q = P + tweak*G
+    # Build q = p + tweak*G
     try:
-        P = PublicKey.from_xonly(xonly)
+        p = PublicKey.from_xonly(xonly)
     except Exception:
-        P = PublicKey(b'\x02' + xonly)
-    T = PrivateKey.from_int(t_int).public_key
-    Q = PublicKey.combine_keys([P, T])
-    qx = Q.format(compressed=True)[1:33]
+        p = PublicKey(b'\x02' + xonly)
+    t_pub = PrivateKey.from_int(t_int).public_key
+    q = PublicKey.combine_keys([p, t_pub])
+    qx = q.format(compressed=True)[1:33]
     expected_spk = (b"\x51\x20" + qx).hex()
     actual_spk = witness_spk_hex.lower()
     ok = (expected_spk == actual_spk)
@@ -55,4 +73,3 @@ def verify_taproot_path(tapscript_hex: str, control_block_hex: str, witness_spk_
         'actual_spk': actual_spk,
         'reason': None if ok else 'scriptPubKey mismatch',
     }
-

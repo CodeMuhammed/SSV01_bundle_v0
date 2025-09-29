@@ -13,8 +13,15 @@ OP_ENDIF
 Witness (script-path)
 - Borrower: [sig_b, s, 0x01, tapscript, control]
 - Provider: [sig_p, 0x00, tapscript, control]
+
+This module provides helpers to build the tapscript for the policy, compute
+TapLeaf hashes, and produce a simple disassembly for debugging.
 """
-import binascii, hashlib
+from __future__ import annotations
+
+import binascii
+import hashlib
+from typing import Dict
 
 # Opcodes
 OP_IF = 0x63
@@ -62,6 +69,14 @@ def push_scriptnum(n: int) -> bytes:
 
 
 def build_tapscript(hash_h_hex: str, borrower_pk_hex: str, csv_blocks: int, provider_pk_hex: str) -> bytes:
+    """Build tapscript for the two-branch policy.
+
+    Args:
+        hash_h_hex: 32-byte hex string, sha256(s).
+        borrower_pk_hex: 32-byte x-only borrower pubkey hex.
+        csv_blocks: positive integer CSV timelock (blocks).
+        provider_pk_hex: 32-byte x-only provider pubkey hex.
+    """
     h = binascii.unhexlify(hash_h_hex)
     if len(h) != 32:
         raise ValueError("hash_h must be 32 bytes hex")
@@ -100,7 +115,7 @@ def tapleaf_hash(script: bytes, leaf_version: int = LEAF_VERSION) -> bytes:
 
 
 def disasm(script: bytes) -> str:
-    names = {
+    names: Dict[int, str] = {
         OP_IF: 'OP_IF',
         OP_ELSE: 'OP_ELSE',
         OP_ENDIF: 'OP_ENDIF',
@@ -110,7 +125,7 @@ def disasm(script: bytes) -> str:
         OP_DROP: 'OP_DROP',
         OP_CHECKSIG: 'OP_CHECKSIG',
     }
-    out = []
+    out: list[str] = []
     i = 0
     while i < len(script):
         op = script[i]; i += 1
