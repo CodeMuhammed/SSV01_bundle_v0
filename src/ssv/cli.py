@@ -24,6 +24,7 @@ from .verify import verify_taproot_path
 from .hexutil import parse_hex, file_or_hex, is_hex_str
 from .policy import PolicyParams
 from .psbtio import load_psbt_from_file, write_psbt, to_raw_tx_hex, cscript_witness, get_input_witness_spk_hex
+from .witness import Branch, build_witness
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -80,9 +81,9 @@ def finalize_witness(args: argparse.Namespace) -> None:
         if not args.preimage:
             raise ValueError("--preimage required in borrower mode")
         preimage = parse_hex('preimage', args.preimage)
-        stack_items = [sig, preimage, b'\x01', tapscript, control]
+        stack_items = build_witness(Branch.CLOSE, sig, tapscript, control, preimage=preimage)
     else:
-        stack_items = [sig, b'\x00', tapscript, control]
+        stack_items = build_witness(Branch.LIQUIDATE, sig, tapscript, control)
 
     psbt.inputs[args.input_index].final_scriptwitness = CScriptWitness(stack_items)
     pi = psbt.inputs[args.input_index]
