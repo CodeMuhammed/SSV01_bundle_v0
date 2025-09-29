@@ -17,7 +17,7 @@ def _psbt_available() -> bool:
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_psbt_load_and_write_roundtrip():
-    from bitcointx.core.psbt import PSBT
+    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
     psbt = PSBT()
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, 'a.psbt')
@@ -28,10 +28,9 @@ def test_psbt_load_and_write_roundtrip():
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_psbt_to_raw_and_witness_errors():
-    from bitcointx.core.psbt import PSBT
+    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
     psbt = PSBT()
     with pytest.raises(Exception):
         _ = to_raw_tx_hex(psbt)
     with pytest.raises(Exception):
         _ = get_input_witness_spk_hex(psbt, 0)
-

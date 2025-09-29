@@ -3,13 +3,14 @@ import sys
 
 import pytest
 
+from typing import Sequence
 from ssv.cli import main as ssv_main
 
 
-def run_cli(argv):
+def run_cli(argv: Sequence[str]) -> str:
     old = sys.argv[:]
     try:
-        sys.argv = ['ssv'] + argv
+        sys.argv = ['ssv'] + list(argv)
         from io import StringIO
         import contextlib
         buf = StringIO()
@@ -29,12 +30,8 @@ def test_cli_build_json_output():
     assert 'tapscript_hex' in data and 'tapleaf_hash_simple' in data and 'tapleaf_hash_tagged' in data
 
 
-@pytest.mark.skipif('coincurve' not in {m.__name__ for m in list(__import__('sys').modules.values()) if m}, reason='coincurve import may not be available')
 def test_cli_verify_json_success():
-    try:
-        import coincurve  # noqa: F401
-    except Exception:
-        pytest.skip('coincurve not installed')
+    pytest.importorskip('coincurve', reason='coincurve not installed')
     h = '00' * 32
     pb = '11' * 32
     pp = '22' * 32
@@ -55,4 +52,3 @@ def test_cli_verify_json_success():
     vout = run_cli(['verify-path', '--tapscript', taps_hex, '--control', ctrl_hex, '--witness-spk', spk_hex, '--json'])
     vdata = json.loads(vout)
     assert vdata['ok'] is True and vdata['expected_spk'] == spk_hex and vdata['actual_spk'] == spk_hex
-

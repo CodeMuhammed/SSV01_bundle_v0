@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from ssv.tapscript import build_tapscript, tapleaf_hash_tagged
@@ -7,12 +5,8 @@ from ssv.taproot import scriptpubkey_from_xonly, compute_output_key_xonly
 from ssv.verify import verify_taproot_path
 
 
-@pytest.mark.skipif('coincurve' not in {m.__name__ for m in list(__import__('sys').modules.values()) if m}, reason='coincurve import may not be available')
 def test_verify_path_with_synthetic_control_block():
-    try:
-        import coincurve  # noqa: F401
-    except Exception:
-        pytest.skip('coincurve not installed')
+    pytest.importorskip('coincurve', reason='coincurve not installed')
 
     # Build a tapscript from deterministic params
     h = '00' * 32
@@ -39,4 +33,3 @@ def test_verify_path_with_synthetic_control_block():
     assert res['ok'] is True
     assert res['expected_spk'] == spk_hex
     assert res['actual_spk'] == spk_hex
-

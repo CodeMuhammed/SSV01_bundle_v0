@@ -1,4 +1,3 @@
-import io
 import os
 import tempfile
 
@@ -27,4 +26,3 @@ def test_file_or_hex_precedence_and_file_reading():
         assert file_or_hex('x', 'ff', p) == b'\xff'
         # file path used when hex not provided
         assert file_or_hex('x', None, p) == b'\x0a'
-

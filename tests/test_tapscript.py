@@ -1,5 +1,3 @@
-import binascii
-
 from ssv.tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disasm
 
 
@@ -31,4 +29,3 @@ def test_build_tapscript_and_hashes():
     # Basic disasm sanity
     d = disasm(script)
     assert 'OP_IF' in d and 'OP_ELSE' in d and 'OP_ENDIF' in d
-
