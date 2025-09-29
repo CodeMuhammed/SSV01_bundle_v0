@@ -32,11 +32,22 @@ def cmd_build(args: argparse.Namespace) -> None:
     script = build_tapscript(args.hash_h, args.borrower_pk, args.csv_blocks, args.provider_pk)
     leaf_simple = tapleaf_hash(script)
     leaf_tagged = tapleaf_hash_tagged(script)
-    print("tapscript_hex       =", script.hex())
-    print("tapleaf_hash_simple =", leaf_simple.hex())
-    print("tapleaf_hash_tagged =", leaf_tagged.hex())
-    if args.disasm:
-        print("disasm        =", disasm(script))
+    if args.json:
+        import json
+        out = {
+            'tapscript_hex': script.hex(),
+            'tapleaf_hash_simple': leaf_simple.hex(),
+            'tapleaf_hash_tagged': leaf_tagged.hex(),
+        }
+        if args.disasm:
+            out['disasm'] = disasm(script)
+        print(json.dumps(out))
+    else:
+        print("tapscript_hex       =", script.hex())
+        print("tapleaf_hash_simple =", leaf_simple.hex())
+        print("tapleaf_hash_tagged =", leaf_tagged.hex())
+        if args.disasm:
+            print("disasm        =", disasm(script))
 
 
 def finalize_witness(args: argparse.Namespace) -> None:
@@ -114,6 +125,7 @@ def main():
     ap_b.add_argument('--csv-blocks', required=True, type=int, help='relative timelock in blocks')
     ap_b.add_argument('--provider-pk', required=True, help='32B hex x-only pubkey')
     ap_b.add_argument('--disasm', action='store_true', help='print simple disassembly')
+    ap_b.add_argument('--json', action='store_true', help='print JSON output')
     ap_b.set_defaults(func=cmd_build)
 
     ap_f = sub.add_parser('finalize', help='finalize a PSBT input with Taproot script-path witness')
@@ -141,6 +153,7 @@ def main():
     ap_v.add_argument('--control-file', help='read control block hex from file')
     ap_v.add_argument('--witness-spk', help='witness scriptPubKey hex (v1 segwit taproot)')
     ap_v.add_argument('--psbt-in', help='optional PSBT (base64 or hex) to extract witness_utxo spk from input 0')
+    ap_v.add_argument('--json', action='store_true', help='print JSON output')
     def cmd_verify(args: argparse.Namespace) -> None:
         import binascii
         taps_hex = file_or_hex('tapscript', args.tapscript, args.tapscript_file).hex()
@@ -158,15 +171,19 @@ def main():
         if spk_hex is None:
             raise ValueError('Provide --witness-spk or --psbt-in')
         res = verify_taproot_path(taps_hex, ctrl_hex, spk_hex)
-        ok = res.get('ok')
-        if ok:
-            print('[OK] taproot path verified')
+        if args.json:
+            import json
+            print(json.dumps(res))
         else:
-            print('[FAIL] taproot path mismatch')
-        print('expected_spk =', res.get('expected_spk'))
-        print('actual_spk   =', res.get('actual_spk'))
-        if res.get('reason'):
-            print('reason      =', res.get('reason'))
+            ok = res.get('ok')
+            if ok:
+                print('[OK] taproot path verified')
+            else:
+                print('[FAIL] taproot path mismatch')
+            print('expected_spk =', res.get('expected_spk'))
+            print('actual_spk   =', res.get('actual_spk'))
+            if res.get('reason'):
+                print('reason      =', res.get('reason'))
     ap_v.set_defaults(func=cmd_verify)
 
     args = ap.parse_args()
