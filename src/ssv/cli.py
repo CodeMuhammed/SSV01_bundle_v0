@@ -17,9 +17,9 @@ Notes
 """
 import argparse
 import sys
-from typing import Any
+from typing import Any, Optional, List, Tuple, Dict
 
-from .tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disasm
+from .tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disasm, pushdata as script_pushdata
 from .verify import verify_taproot_path
 from .hexutil import parse_hex, file_or_hex
 from .policy import PolicyParams
@@ -51,6 +51,187 @@ def cmd_build(args: argparse.Namespace) -> None:
             print("disasm        =", disasm(script))
 
 
+# PSBT/tx helpers and verifiers
+def _tx_from_psbt(psbt: Any) -> Any:
+    return getattr(psbt, 'tx', None) or getattr(psbt, 'unsigned_tx', None)
+
+
+def _get_vout_list(tx: Any) -> List[Any]:
+    vout = getattr(tx, 'vout', None)
+    if vout is None:
+        raise RuntimeError('Transaction has no outputs list (vout)')
+    return list(vout)
+
+
+def _get_out_value(out: Any) -> Optional[int]:
+    v = getattr(out, 'nValue', None)
+    if v is None:
+        v = getattr(out, 'value', None)
+    return None if v is None else int(v)
+
+
+def verify_anchor_output(psbt: Any, index: int, spk_hex: str, value: int) -> Tuple[bool, Optional[str], str, Optional[int]]:
+    tx = _tx_from_psbt(psbt)
+    if tx is None:
+        raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
+    vout = _get_vout_list(tx)
+    if index < 0 or index >= len(vout):
+        raise IndexError(f'output index {index} out of range (num_outputs={len(vout)})')
+    out_obj: Any = vout[index]
+    actual_spk: str = out_obj.scriptPubKey.hex().lower()
+    actual_value = _get_out_value(out_obj)
+    if actual_value is None:
+        raise RuntimeError('Could not read output value')
+    ok_spk = (actual_spk == spk_hex.lower())
+    ok_value = (int(actual_value) == int(value))
+    ok = ok_spk and ok_value
+    reason: Optional[str] = None if ok else ('spk mismatch' if not ok_spk else 'value mismatch')
+    return ok, reason, actual_spk, actual_value
+
+
+def verify_opret_output(psbt: Any, index: int, data_hex: str, value: Optional[int] = None) -> Tuple[bool, Optional[str], str, Optional[int]]:
+    tx = _tx_from_psbt(psbt)
+    if tx is None:
+        raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
+    vout = _get_vout_list(tx)
+    if index < 0 or index >= len(vout):
+        raise IndexError(f'output index {index} out of range (num_outputs={len(vout)})')
+    out_obj: Any = vout[index]
+    actual_spk: str = out_obj.scriptPubKey.hex().lower()
+    import binascii
+    try:
+        data_bytes = binascii.unhexlify(data_hex)
+    except Exception:
+        raise ValueError('data must be hex')
+    expected_spk: str = (b"\x6a" + script_pushdata(data_bytes)).hex()
+    ok_spk = (actual_spk == expected_spk)
+    actual_value = _get_out_value(out_obj)
+    ok_value = True
+    if value is not None:
+        if actual_value is None:
+            raise RuntimeError('Could not read output value')
+        ok_value = (int(actual_value) == int(value))
+    ok = ok_spk and ok_value
+    reason: Optional[str] = None if ok else ('spk mismatch' if not ok_spk else 'value mismatch')
+    return ok, reason, expected_spk, actual_value
+
+
+def cmd_verify_path(args: argparse.Namespace) -> None:
+    taps_hex = file_or_hex('tapscript', args.tapscript, args.tapscript_file).hex()
+    ctrl_hex = file_or_hex('control', args.control, args.control_file).hex()
+    spk_hex: Optional[str] = args.witness_spk
+    psbt_in: Optional[str] = args.psbt_in
+    if spk_hex is None and psbt_in is not None:
+        try:
+            psbt = load_psbt_from_file(psbt_in)
+        except Exception:
+            print('Install python-bitcointx to read PSBTs for verification', file=sys.stderr)
+            raise
+        spk_hex = get_input_witness_spk_hex(psbt, 0)
+    if spk_hex is None:
+        raise ValueError('Provide --witness-spk or --psbt-in')
+    res = verify_taproot_path(taps_hex, ctrl_hex, spk_hex)
+    if args.json:
+        import json
+        print(json.dumps(res))
+    else:
+        ok = res.get('ok')
+        if ok:
+            print('[OK] taproot path verified')
+        else:
+            print('[FAIL] taproot path mismatch')
+        print('expected_spk =', res.get('expected_spk'))
+        print('actual_spk   =', res.get('actual_spk'))
+        if res.get('reason'):
+            print('reason      =', res.get('reason'))
+
+
+def cmd_anchor_verify(args: argparse.Namespace) -> None:
+    try:
+        psbt = load_psbt_from_file(args.psbt_in)
+    except Exception as e:
+        print(f'ERROR: anchor-verify requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
+        raise
+    ok, reason, actual_spk, actual_value = verify_anchor_output(psbt, args.index, args.spk, args.value)
+    if args.json:
+        import json
+        print(json.dumps({
+            'ok': ok,
+            'index': args.index,
+            'expected_spk': args.spk.lower(),
+            'actual_spk': actual_spk.lower(),
+            'expected_value': int(args.value),
+            'actual_value': None if actual_value is None else int(actual_value),
+            'reason': reason,
+        }))
+    else:
+        print('[OK] anchor output matches' if ok else '[FAIL] anchor output mismatch')
+        print('index         =', args.index)
+        print('expected_spk  =', args.spk.lower())
+        print('actual_spk    =', actual_spk.lower())
+        print('expected_sat  =', int(args.value))
+        print('actual_sat    =', None if actual_value is None else int(actual_value))
+        if not ok and reason:
+            print('reason        =', reason)
+
+
+def cmd_opret_verify(args: argparse.Namespace) -> None:
+    try:
+        psbt = load_psbt_from_file(args.psbt_in)
+    except Exception as e:
+        print(f'ERROR: opret-verify requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
+        raise
+    ok, reason, expected_spk, actual_value = verify_opret_output(psbt, args.index, args.data, args.value)
+    # For display, compute actual spk
+    tx = _tx_from_psbt(psbt)
+    if tx is None:
+        raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
+    vout = _get_vout_list(tx)
+    actual_spk = vout[args.index].scriptPubKey.hex().lower()
+    if args.json:
+        import json
+        print(json.dumps({
+            'ok': ok,
+            'index': args.index,
+            'expected_spk': expected_spk,
+            'actual_spk': actual_spk,
+            'expected_value': None if args.value is None else int(args.value),
+            'actual_value': None if actual_value is None else int(actual_value),
+            'reason': reason,
+        }))
+    else:
+        print('[OK] OP_RETURN output matches' if ok else '[FAIL] OP_RETURN output mismatch')
+        print('index         =', args.index)
+        print('expected_spk  =', expected_spk)
+        print('actual_spk    =', actual_spk)
+        if args.value is not None:
+            print('expected_sat  =', int(args.value))
+            print('actual_sat    =', None if actual_value is None else int(actual_value))
+        if not ok and reason:
+            print('reason        =', reason)
+
+
+def cmd_anchor_show(args: argparse.Namespace) -> None:
+    try:
+        psbt = load_psbt_from_file(args.psbt_in)
+    except Exception as e:
+        print(f'ERROR: anchor-show requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
+        raise
+    tx = _tx_from_psbt(psbt)
+    if tx is None:
+        raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
+    vout = _get_vout_list(tx)
+    rows: List[Dict[str, Any]] = []
+    for i, out_obj in enumerate(vout):
+        spk = out_obj.scriptPubKey.hex()
+        val = _get_out_value(out_obj)
+        rows.append({'index': i, 'value': val, 'spk': spk})
+    if args.json:
+        import json
+        print(json.dumps(rows))
+    else:
+        for r in rows:
+            print(f"{r['index']}: value={r['value']} spk={r['spk']}")
 def finalize_witness(args: argparse.Namespace) -> None:
     try:
         CScriptWitness = cscript_witness()
@@ -75,78 +256,22 @@ def finalize_witness(args: argparse.Namespace) -> None:
     psbt = load_psbt_from_file(args.psbt_in)
 
     # Optional guards: verify presence of anchors before finalizing
-    def _tx_from_psbt(p: Any) -> Any:
-        return getattr(p, 'tx', None) or getattr(p, 'unsigned_tx', None)
-    def _get_vout_list(tx: Any) -> Any:
-        return getattr(tx, 'vout', None)
-    def _get_out_value(out: Any):
-        v = getattr(out, 'nValue', None)
-        if v is None:
-            v = getattr(out, 'value', None)
-        return v
-    def _pushdata(b: bytes) -> bytes:
-        n = len(b)
-        if n < 0x4c:
-            return bytes([n]) + b
-        elif n <= 0xff:
-            return b"\x4c" + bytes([n]) + b
-        elif n <= 0xffff:
-            return b"\x4d" + n.to_bytes(2, 'little') + b
-        else:
-            return b"\x4e" + n.to_bytes(4, 'little') + b
 
     # TapRet anchor guard
     if any(getattr(args, k, None) is not None for k in ('require_anchor_index','require_anchor_spk','require_anchor_value')):
         if args.require_anchor_index is None or args.require_anchor_spk is None or args.require_anchor_value is None:
             raise ValueError('When using --require-anchor-*, provide all of: --require-anchor-index, --require-anchor-spk, --require-anchor-value')
-        tx = _tx_from_psbt(psbt)
-        if tx is None:
-            raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
-        vout = _get_vout_list(tx)
-        if vout is None:
-            raise RuntimeError('Transaction has no outputs list (vout)')
-        i = int(args.require_anchor_index)
-        if i < 0 or i >= len(vout):
-            raise ValueError(f'Anchor guard: output index {i} out of range (num_outputs={len(vout)})')
-        out_obj: Any = vout[i]
-        actual_spk = out_obj.scriptPubKey.hex().lower()
-        actual_value = _get_out_value(out_obj)
-        if actual_value is None:
-            raise RuntimeError('Anchor guard: could not read output value')
-        if actual_spk != args.require_anchor_spk.lower():
-            raise ValueError('Anchor guard failed: spk mismatch')
-        if int(actual_value) != int(args.require_anchor_value):
-            raise ValueError('Anchor guard failed: value mismatch')
+        ok, reason, _, _ = verify_anchor_output(psbt, int(args.require_anchor_index), args.require_anchor_spk, int(args.require_anchor_value))
+        if not ok:
+            raise ValueError(f'Anchor guard failed: {reason}')
 
     # OP_RETURN guard
     if any(getattr(args, k, None) is not None for k in ('require_opret_index','require_opret_data','require_opret_value')):
         if args.require_opret_index is None or args.require_opret_data is None:
             raise ValueError('When using --require-opret-*, provide at least: --require-opret-index and --require-opret-data [--require-opret-value optional]')
-        tx = _tx_from_psbt(psbt)
-        if tx is None:
-            raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
-        vout = _get_vout_list(tx)
-        if vout is None:
-            raise RuntimeError('Transaction has no outputs list (vout)')
-        i = int(args.require_opret_index)
-        if i < 0 or i >= len(vout):
-            raise ValueError(f'OP_RETURN guard: output index {i} out of range (num_outputs={len(vout)})')
-        out_obj: Any = vout[i]
-        actual_spk = out_obj.scriptPubKey.hex().lower()
-        import binascii
-        try:
-            data_bytes = binascii.unhexlify(args.require_opret_data)
-        except Exception:
-            raise ValueError('OP_RETURN guard: data must be hex')
-        expected_spk = (b"\x6a" + _pushdata(data_bytes)).hex()
-        if actual_spk != expected_spk:
-            raise ValueError('OP_RETURN guard failed: spk mismatch')
-        if args.require_opret_value is not None:
-            actual_value = _get_out_value(out_obj)
-            if actual_value is None:
-                raise RuntimeError('OP_RETURN guard: could not read output value')
-            if int(actual_value) != int(args.require_opret_value):
-                raise ValueError('OP_RETURN guard failed: value mismatch')
+        ok, reason, _, _ = verify_opret_output(psbt, int(args.require_opret_index), args.require_opret_data, args.require_opret_value)
+        if not ok:
+            raise ValueError(f'OP_RETURN guard failed: {reason}')
 
     if args.input_index < 0 or args.input_index >= len(psbt.inputs):
         raise IndexError(f"Input index {args.input_index} out of range")
@@ -236,36 +361,7 @@ def main():
     ap_v.add_argument('--witness-spk', help='witness scriptPubKey hex (v1 segwit taproot)')
     ap_v.add_argument('--psbt-in', help='optional PSBT (base64 or hex) to extract witness_utxo spk from input 0')
     ap_v.add_argument('--json', action='store_true', help='print JSON output')
-    def cmd_verify(args: argparse.Namespace) -> None:
-        taps_hex = file_or_hex('tapscript', args.tapscript, args.tapscript_file).hex()
-        ctrl_hex = file_or_hex('control', args.control, args.control_file).hex()
-        from typing import Optional
-        spk_hex: Optional[str] = args.witness_spk
-        psbt_in: Optional[str] = args.psbt_in
-        if spk_hex is None and psbt_in is not None:
-            try:
-                psbt = load_psbt_from_file(psbt_in)
-            except Exception:
-                print('Install python-bitcointx to read PSBTs for verification', file=sys.stderr)
-                raise
-            spk_hex = get_input_witness_spk_hex(psbt, 0)
-        if spk_hex is None:
-            raise ValueError('Provide --witness-spk or --psbt-in')
-        res = verify_taproot_path(taps_hex, ctrl_hex, spk_hex)
-        if args.json:
-            import json
-            print(json.dumps(res))
-        else:
-            ok = res.get('ok')
-            if ok:
-                print('[OK] taproot path verified')
-            else:
-                print('[FAIL] taproot path mismatch')
-            print('expected_spk =', res.get('expected_spk'))
-            print('actual_spk   =', res.get('actual_spk'))
-            if res.get('reason'):
-                print('reason      =', res.get('reason'))
-    ap_v.set_defaults(func=cmd_verify)
+    ap_v.set_defaults(func=cmd_verify_path)
 
     # anchor-verify: lean check that a given output index matches expected SPK/value
     ap_a = sub.add_parser('anchor-verify', help='verify that a PSBT has an output matching index/SPK/value (TapRet anchor check)')
@@ -274,56 +370,6 @@ def main():
     ap_a.add_argument('--spk', required=True, help='expected scriptPubKey hex at the index (TapRet P2TR)')
     ap_a.add_argument('--value', required=True, type=int, help='expected output value in sats at the index')
     ap_a.add_argument('--json', action='store_true', help='print JSON output')
-    def cmd_anchor_verify(args: argparse.Namespace) -> None:
-        try:
-            psbt = load_psbt_from_file(args.psbt_in)
-        except Exception as e:
-            print(f'ERROR: anchor-verify requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
-            raise
-
-        # Access the unsigned transaction and outputs
-        tx = getattr(psbt, 'tx', None) or getattr(psbt, 'unsigned_tx', None)
-        if tx is None:
-            raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
-        vout = getattr(tx, 'vout', None)
-        if vout is None:
-            raise RuntimeError('Transaction has no outputs list (vout)')
-        if args.index < 0 or args.index >= len(vout):
-            raise IndexError(f'output index {args.index} out of range (num_outputs={len(vout)})')
-        out_obj: Any = vout[args.index]
-        # scriptPubKey hex
-        actual_spk = out_obj.scriptPubKey.hex()
-        # value
-        actual_value = getattr(out_obj, 'nValue', None)
-        if actual_value is None:
-            # alternative attribute name in some variants
-            actual_value = getattr(out_obj, 'value', None)
-        if actual_value is None:
-            raise RuntimeError('Could not read output value')
-
-        ok_spk = (actual_spk.lower() == args.spk.lower())
-        ok_value = (int(actual_value) == int(args.value))
-        ok = ok_spk and ok_value
-        if args.json:
-            import json
-            print(json.dumps({
-                'ok': ok,
-                'index': args.index,
-                'expected_spk': args.spk.lower(),
-                'actual_spk': actual_spk.lower(),
-                'expected_value': int(args.value),
-                'actual_value': int(actual_value),
-                'reason': None if ok else ('spk mismatch' if not ok_spk else 'value mismatch'),
-            }))
-        else:
-            print('[OK] anchor output matches' if ok else '[FAIL] anchor output mismatch')
-            print('index         =', args.index)
-            print('expected_spk  =', args.spk.lower())
-            print('actual_spk    =', actual_spk.lower())
-            print('expected_sat  =', int(args.value))
-            print('actual_sat    =', int(actual_value))
-            if not ok:
-                print('reason        =', 'spk mismatch' if not ok_spk else 'value mismatch')
     ap_a.set_defaults(func=cmd_anchor_verify)
 
     # opret-verify: verify an OP_RETURN output contains the expected data push (and optional value)
@@ -333,101 +379,12 @@ def main():
     ap_o.add_argument('--data', required=True, help='expected OP_RETURN data (hex)')
     ap_o.add_argument('--value', type=int, help='optional expected output value in sats (commonly 0)')
     ap_o.add_argument('--json', action='store_true', help='print JSON output')
-    def _pushdata(b: bytes) -> bytes:
-        n = len(b)
-        if n < 0x4c:
-            return bytes([n]) + b
-        elif n <= 0xff:
-            return b"\x4c" + bytes([n]) + b
-        elif n <= 0xffff:
-            return b"\x4d" + n.to_bytes(2, 'little') + b
-        else:
-            return b"\x4e" + n.to_bytes(4, 'little') + b
-    def cmd_opret_verify(args: argparse.Namespace) -> None:
-        try:
-            psbt = load_psbt_from_file(args.psbt_in)
-        except Exception as e:
-            print(f'ERROR: opret-verify requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
-            raise
-        tx = getattr(psbt, 'tx', None) or getattr(psbt, 'unsigned_tx', None)
-        if tx is None:
-            raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
-        vout = getattr(tx, 'vout', None)
-        if vout is None:
-            raise RuntimeError('Transaction has no outputs list (vout)')
-        if args.index < 0 or args.index >= len(vout):
-            raise IndexError(f'output index {args.index} out of range (num_outputs={len(vout)})')
-        out_obj: Any = vout[args.index]
-        actual_spk = out_obj.scriptPubKey.hex().lower()
-        # Expected script is: OP_RETURN (0x6a) + push of data
-        try:
-            import binascii
-            data_bytes = binascii.unhexlify(args.data)
-        except Exception:
-            raise ValueError('data must be hex')
-        expected_spk = (b"\x6a" + _pushdata(data_bytes)).hex()
-        ok_spk = (actual_spk == expected_spk)
-        ok_value = True
-        actual_value = getattr(out_obj, 'nValue', None)
-        if actual_value is None:
-            actual_value = getattr(out_obj, 'value', None)
-        if args.value is not None:
-            if actual_value is None:
-                raise RuntimeError('Could not read output value')
-            ok_value = (int(actual_value) == int(args.value))
-        ok = ok_spk and ok_value
-        if args.json:
-            import json
-            print(json.dumps({
-                'ok': ok,
-                'index': args.index,
-                'expected_spk': expected_spk,
-                'actual_spk': actual_spk,
-                'expected_value': None if args.value is None else int(args.value),
-                'actual_value': None if actual_value is None else int(actual_value),
-                'reason': None if ok else ('spk mismatch' if not ok_spk else 'value mismatch'),
-            }))
-        else:
-            print('[OK] OP_RETURN output matches' if ok else '[FAIL] OP_RETURN output mismatch')
-            print('index         =', args.index)
-            print('expected_spk  =', expected_spk)
-            print('actual_spk    =', actual_spk)
-            if args.value is not None:
-                print('expected_sat  =', int(args.value))
-                print('actual_sat    =', None if actual_value is None else int(actual_value))
-            if not ok:
-                print('reason        =', 'spk mismatch' if not ok_spk else 'value mismatch')
     ap_o.set_defaults(func=cmd_opret_verify)
 
     # anchor-show: list outputs for convenience
     ap_s = sub.add_parser('anchor-show', help='list transaction outputs (index, value, scriptPubKey hex) from a PSBT')
     ap_s.add_argument('--psbt-in', required=True, help='input PSBT file (base64 or hex)')
     ap_s.add_argument('--json', action='store_true', help='print JSON output')
-    def cmd_anchor_show(args: argparse.Namespace) -> None:
-        try:
-            psbt = load_psbt_from_file(args.psbt_in)
-        except Exception as e:
-            print(f'ERROR: anchor-show requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
-            raise
-        tx = getattr(psbt, 'tx', None) or getattr(psbt, 'unsigned_tx', None)
-        if tx is None:
-            raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
-        vout = getattr(tx, 'vout', None)
-        if vout is None:
-            raise RuntimeError('Transaction has no outputs list (vout)')
-        rows: list[dict[str, Any]] = []
-        for i, out_obj in enumerate(vout):
-            spk = out_obj.scriptPubKey.hex()
-            val = getattr(out_obj, 'nValue', None)
-            if val is None:
-                val = getattr(out_obj, 'value', None)
-            rows.append({'index': i, 'value': None if val is None else int(val), 'spk': spk})
-        if args.json:
-            import json
-            print(json.dumps(rows))
-        else:
-            for r in rows:
-                print(f"{r['index']}: value={r['value']} spk={r['spk']}")
     ap_s.set_defaults(func=cmd_anchor_show)
 
     args = ap.parse_args()
