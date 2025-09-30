@@ -17,11 +17,10 @@ Notes
 """
 import argparse
 import sys
-import binascii
 
 from .tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disasm
 from .verify import verify_taproot_path
-from .hexutil import parse_hex, file_or_hex, is_hex_str
+from .hexutil import parse_hex, file_or_hex
 from .policy import PolicyParams
 from .psbtio import load_psbt_from_file, write_psbt, to_raw_tx_hex, cscript_witness, get_input_witness_spk_hex
 from .witness import Branch, build_witness
@@ -156,7 +155,6 @@ def main():
     ap_v.add_argument('--psbt-in', help='optional PSBT (base64 or hex) to extract witness_utxo spk from input 0')
     ap_v.add_argument('--json', action='store_true', help='print JSON output')
     def cmd_verify(args: argparse.Namespace) -> None:
-        import binascii
         taps_hex = file_or_hex('tapscript', args.tapscript, args.tapscript_file).hex()
         ctrl_hex = file_or_hex('control', args.control, args.control_file).hex()
         from typing import Optional
@@ -186,6 +184,65 @@ def main():
             if res.get('reason'):
                 print('reason      =', res.get('reason'))
     ap_v.set_defaults(func=cmd_verify)
+
+    # anchor-verify: lean check that a given output index matches expected SPK/value
+    ap_a = sub.add_parser('anchor-verify', help='verify that a PSBT has an output matching index/SPK/value (TapRet anchor check)')
+    ap_a.add_argument('--psbt-in', required=True, help='input PSBT file (base64 or hex)')
+    ap_a.add_argument('--index', required=True, type=int, help='output index to check')
+    ap_a.add_argument('--spk', required=True, help='expected scriptPubKey hex at the index (TapRet P2TR)')
+    ap_a.add_argument('--value', required=True, type=int, help='expected output value in sats at the index')
+    ap_a.add_argument('--json', action='store_true', help='print JSON output')
+    def cmd_anchor_verify(args: argparse.Namespace) -> None:
+        try:
+            psbt = load_psbt_from_file(args.psbt_in)
+        except Exception as e:
+            print(f'ERROR: anchor-verify requires python-bitcointx to read PSBTs ({e})', file=sys.stderr)
+            raise
+
+        # Access the unsigned transaction and outputs
+        tx = getattr(psbt, 'tx', None) or getattr(psbt, 'unsigned_tx', None)
+        if tx is None:
+            raise RuntimeError('PSBT does not expose unsigned transaction (tx)')
+        vout = getattr(tx, 'vout', None)
+        if vout is None:
+            raise RuntimeError('Transaction has no outputs list (vout)')
+        if args.index < 0 or args.index >= len(vout):
+            raise IndexError(f'output index {args.index} out of range (num_outputs={len(vout)})')
+        out = vout[args.index]
+        # scriptPubKey hex
+        actual_spk = out.scriptPubKey.hex()
+        # value
+        actual_value = getattr(out, 'nValue', None)
+        if actual_value is None:
+            # alternative attribute name in some variants
+            actual_value = getattr(out, 'value', None)
+        if actual_value is None:
+            raise RuntimeError('Could not read output value')
+
+        ok_spk = (actual_spk.lower() == args.spk.lower())
+        ok_value = (int(actual_value) == int(args.value))
+        ok = ok_spk and ok_value
+        if args.json:
+            import json
+            print(json.dumps({
+                'ok': ok,
+                'index': args.index,
+                'expected_spk': args.spk.lower(),
+                'actual_spk': actual_spk.lower(),
+                'expected_value': int(args.value),
+                'actual_value': int(actual_value),
+                'reason': None if ok else ('spk mismatch' if not ok_spk else 'value mismatch'),
+            }))
+        else:
+            print('[OK] anchor output matches' if ok else '[FAIL] anchor output mismatch')
+            print('index         =', args.index)
+            print('expected_spk  =', args.spk.lower())
+            print('actual_spk    =', actual_spk.lower())
+            print('expected_sat  =', int(args.value))
+            print('actual_sat    =', int(actual_value))
+            if not ok:
+                print('reason        =', 'spk mismatch' if not ok_spk else 'value mismatch')
+    ap_a.set_defaults(func=cmd_anchor_verify)
 
     args = ap.parse_args()
     args.func(args)

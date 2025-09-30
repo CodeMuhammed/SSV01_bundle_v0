@@ -78,6 +78,18 @@ Demos (docker, regtest)
 - CSV LIQUIDATE skeleton: `make demo-liq`
 - Use `make docker-up` first to start containers; `make docker-logs` to tail Core logs.
 
+TapRet (lean anchoring)
+- SSV stays Taproot-vault–focused. RGB tooling must supply the TapRet anchor scriptPubKey (hex) and value (sats).
+- Recommended minimal flow for CLOSE+REPAY:
+  1) Use your RGB tool to compute the TapRet anchor SPK and choose a dust-safe value.
+  2) Insert that anchor output into the CLOSE PSBT using your wallet or helper scripts.
+  3) Verify before finalizing: `ssv anchor-verify --psbt-in close.psbt --index <i> --spk <SPK_HEX> --value <SAT> [--json]`.
+  4) Finalize borrower witness with `ssv finalize`.
+- Notes:
+  - Use a dedicated anchor output at a known index to avoid wallet coordination.
+  - Keep the anchor output (index, spk, value) identical across RBF bumps.
+  - Dust: ensure the anchor output value is above network dust thresholds.
+
 Verify-path dependency
 - The `ssv` container includes coincurve; `verify-path` works out of the box.
 
@@ -161,6 +173,7 @@ Developer notes (modules and helpers)
 - ssv.taproot: Taproot helpers (parse control block, compute output key, scriptPubKey build).
 - ssv.psbtio: PSBT load/write utilities (hex/base64 auto-detect), raw tx conversion, witness_utxo SPK extraction.
 - ssv.witness: witness stack builder with Branch enum (CLOSE / LIQUIDATE) and IF/ELSE selectors.
+ - ssv.cli anchor-verify: lean check that a PSBT contains the expected TapRet anchor output at the given index.
 
 
 
