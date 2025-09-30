@@ -45,7 +45,7 @@ CLI quick start (docker)
 - Build tapscript (human output or JSON with --json):
   `docker compose exec ssv ssv build-tapscript --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --disasm [--json]`
 - Finalize PSBT (borrower):
-  `docker compose exec ssv ssv finalize --mode borrower --psbt-in close.psbt --psbt-out close.final.psbt --tx-out close.final.tx --sig \`SIG_B\` --preimage \`s\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
+  `docker compose exec ssv ssv finalize --mode borrower --psbt-in close.psbt --psbt-out close.final.psbt --tx-out close.final.tx --sig \`SIG_B\` --preimage \`s\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\` [--require-anchor-index i --require-anchor-spk SPK --require-anchor-value SAT]`
 - Finalize PSBT (provider):
   `docker compose exec ssv ssv finalize --mode provider --psbt-in liq.psbt --psbt-out liq.final.psbt --tx-out liq.final.tx --sig \`SIG_P\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
 
@@ -89,6 +89,13 @@ TapRet (lean anchoring)
   - Use a dedicated anchor output at a known index to avoid wallet coordination.
   - Keep the anchor output (index, spk, value) identical across RBF bumps.
   - Dust: ensure the anchor output value is above network dust thresholds.
+  - Optional guard: add `--require-anchor-*` (or `--require-opret-*`) to `ssv finalize` to enforce the anchor is present before witness finalize.
+
+OP_RETURN fallback (optional)
+- If TapRet is impractical for your setup, you can anchor with OP_RETURN data instead:
+  - Insert an OP_RETURN output into the CLOSE PSBT with your commitment bytes: script = OP_RETURN <data>.
+  - Verify: `ssv opret-verify --psbt-in close.psbt --index <i> --data <HEX> [--value 0] [--json]`.
+  - Then finalize as usual.
 
 Verify-path dependency
 - The `ssv` container includes coincurve; `verify-path` works out of the box.
@@ -171,9 +178,11 @@ Developer notes (modules and helpers)
 - ssv.tapscript: tapscript builder for the two-branch policy; tapleaf hashing; disasm.
 - ssv.policy: PolicyParams dataclass + validate() for input invariants.
 - ssv.taproot: Taproot helpers (parse control block, compute output key, scriptPubKey build).
-- ssv.psbtio: PSBT load/write utilities (hex/base64 auto-detect), raw tx conversion, witness_utxo SPK extraction.
-- ssv.witness: witness stack builder with Branch enum (CLOSE / LIQUIDATE) and IF/ELSE selectors.
+ - ssv.psbtio: PSBT load/write utilities (hex/base64 auto-detect), raw tx conversion, witness_utxo SPK extraction.
+ - ssv.witness: witness stack builder with Branch enum (CLOSE / LIQUIDATE) and IF/ELSE selectors.
  - ssv.cli anchor-verify: lean check that a PSBT contains the expected TapRet anchor output at the given index.
+  - ssv.cli opret-verify: lean check for an OP_RETURN output with expected data.
+  - ssv.cli anchor-show: convenience listing of PSBT outputs.
 
 
 

@@ -106,16 +106,23 @@ echo "$PSBT" > close.psbt
 
 cat <<EOF
 == TODO: Attach RGB REPAY anchor ==
-In another terminal or here using the container, use 'rgb' inside the ssv container to attach the REPAY transition as an anchor to close.psbt.
+Use your RGB tooling (inside the ssv container if convenient) to prepare the REPAY transition and compute the TapRet anchor output:
+  - Anchor SPK (hex, v1 P2TR scriptPubKey)
+  - Anchor value (sats, ≥ dust)
+Insert that anchor output into close.psbt using your wallet or helper scripts.
 
-Examples (adapt to your contract and wallet setup):
+Example (adapt for your stack):
   docker compose exec ssv rgb pay -n regtest <INVOICE> out.consig out.psbt --print
-  # Or use 'rgb exec' with a YAML script and then 'rgb complete' on your signed PSBT
 
-Ensure the REPAY transition verifies sha256(s)=h and pays provider ≥ principal+interest.
+Ensure the REPAY verifies sha256(s)=h and pays provider ≥ principal+interest.
 EOF
 
-read -p "Press Enter after RGB anchor is attached to close.psbt..." _
+read -p "Enter anchor output index: " ANCHOR_INDEX
+read -p "Enter anchor SPK hex (TapRet P2TR): " ANCHOR_SPK
+read -p "Enter anchor value (sats): " ANCHOR_VALUE
+
+echo "== Verify anchor output =="
+$SSV ssv anchor-verify --psbt-in close.psbt --index "$ANCHOR_INDEX" --spk "$ANCHOR_SPK" --value "$ANCHOR_VALUE"
 
 SIG_B_HEX="<BORROWER_SIG_HEX_HERE>"   # replace with real Schnorr signature
 CTRL_HEX="<CONTROL_BLOCK_HEX_HERE>"  # replace with real control block
