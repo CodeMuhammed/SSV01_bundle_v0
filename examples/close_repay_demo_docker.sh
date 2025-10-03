@@ -104,22 +104,140 @@ PY
 )
 echo "$PSBT" > close.psbt
 
-cat <<EOF
-== TODO: Attach RGB REPAY anchor ==
-Use your RGB tooling (inside the ssv container if convenient) to prepare the REPAY transition and compute the TapRet anchor output:
-  - Anchor SPK (hex, v1 P2TR scriptPubKey)
-  - Anchor value (sats, ≥ dust)
-Insert that anchor output into close.psbt using your wallet or helper scripts.
+# Save baseline outputs before RGB anchoring for auto-detection later
+$SSV python - <<'PY'
+import json
+from bitcointx.core.psbt import PSBT
+s=open('close.psbt').read().strip()
+try:
+    psbt=PSBT.from_base64(s)
+except Exception:
+    psbt=PSBT.deserialize(bytes.fromhex(s))
+tx=getattr(psbt,'tx',None) or getattr(psbt,'unsigned_tx',None)
+vout=list(getattr(tx,'vout',[]))
+rows=[]
+for i,out in enumerate(vout):
+    spk=out.scriptPubKey.hex()
+    val=int(getattr(out,'nValue',getattr(out,'value',0)))
+    rows.append({'index':i,'value':val,'spk':spk})
+open('.outs.pre.json','wt').write(json.dumps(rows))
+PY
 
-Example (adapt for your stack):
-  docker compose exec ssv rgb pay -n regtest <INVOICE> out.consig out.psbt --print
+echo "== Attach RGB REPAY anchor (RGB v0.12 TapRet) =="
+echo "The script will use the rgb v0.12 CLI inside the ssv container to update close.psbt with a TapRet anchor."
+read -p "Enter RGB invoice (provider’s receiving invoice): " RGB_INVOICE
 
-Ensure the REPAY verifies sha256(s)=h and pays provider ≥ principal+interest.
-EOF
+echo "-- rgb version --"
+$SSV bash -lc 'rgb --version || true'
 
-read -p "Enter anchor output index: " ANCHOR_INDEX
-read -p "Enter anchor SPK hex (TapRet P2TR): " ANCHOR_SPK
-read -p "Enter anchor value (sats): " ANCHOR_VALUE
+echo "-- running rgb transfer (tapret) --"
+set +e
+$SSV bash -lc \
+  'rgb transfer -n regtest --invoice "$RGB_INVOICE" --method tapret --psbt close.psbt --consignment out.consig --psbt-out close.psbt'
+RC=$?
+set -e
+if [[ $RC -ne 0 ]]; then
+  echo "rgb transfer failed (exit=$RC). Please run your RGB tool manually to anchor TapRet into close.psbt, then continue." >&2
+fi
+
+echo "== Attempting to detect TapRet anchor output (diff vs baseline) =="
+OUTS_JSON=$($SSV python - <<'PY'
+import json, sys
+from bitcointx.core.psbt import PSBT
+try:
+    s=open('close.psbt').read().strip()
+    try:
+        psbt=PSBT.from_base64(s)
+    except Exception:
+        psbt=PSBT.deserialize(bytes.fromhex(s))
+    tx=getattr(psbt,'tx',None) or getattr(psbt,'unsigned_tx',None)
+    vout=list(getattr(tx,'vout',[]))
+    rows=[]
+    for i,out in enumerate(vout):
+        spk=out.scriptPubKey.hex()
+        val=int(getattr(out,'nValue',getattr(out,'value',0)))
+        rows.append({'index':i,'value':val,'spk':spk})
+    # Attempt to diff vs baseline
+    try:
+        pre=json.load(open('.outs.pre.json'))
+    except Exception:
+        pre=None
+    out={'post':rows,'pre':pre}
+    print(json.dumps(out))
+except Exception as e:
+    print(json.dumps({'error':str(e)}))
+PY
+)
+
+DEF_INDEX=""
+DEF_SPK=""
+DEF_VALUE=""
+if [[ "$OUTS_JSON" == *"error"* || -z "$OUTS_JSON" ]]; then
+  echo "Could not auto-detect outputs from PSBT; falling back to manual entry."
+else
+  echo "Outputs detected:" 
+  echo "$OUTS_JSON" | $SSV python - <<'PY'
+import sys, json
+data=json.load(sys.stdin)
+rows=data['post'] if isinstance(data,dict) and 'post' in data else data
+for r in rows:
+    print(f"  {r['index']}: value={r['value']} spk={r['spk']}")
+PY
+  # compute defaults: prefer new outputs vs baseline, then P2TR, else last
+  DEF_INDEX=$($SSV python - <<'PY'
+import sys,json
+data=json.loads(sys.stdin.read())
+post=data['post'] if isinstance(data,dict) and 'post' in data else data
+pre=data.get('pre') if isinstance(data,dict) else None
+
+def p2tr_idx(rows):
+    return [r['index'] for r in rows if isinstance(r.get('spk'),str) and r['spk'].lower().startswith('5120')]
+
+idx=None
+if pre:
+    # multiset of (spk,value) from pre
+    from collections import Counter
+    cpre=Counter((r['spk'].lower(), int(r['value'])) for r in pre)
+    new=[r for r in post if cpre[(r['spk'].lower(), int(r['value']))] == 0]
+    cand = [r['index'] for r in new]
+    if not cand:
+        cand = [r['index'] for r in post if (r['spk'].lower(), int(r['value'])) not in cpre]
+    # filter p2tr if multiple
+    if len(cand) > 1:
+        cand = [i for i in cand if post[i]['spk'].lower().startswith('5120')]
+    if cand:
+        idx = max(cand)
+if idx is None:
+    p = p2tr_idx(post)
+    idx = (max(p) if p else (len(post)-1 if post else 0))
+print(idx)
+PY
+  <<< "$OUTS_JSON")
+  DEF_SPK=$($SSV python - <<'PY'
+import sys,json
+data=json.loads(sys.stdin.read())
+rows=data['post'] if isinstance(data,dict) and 'post' in data else data
+idx=int(sys.argv[1]) if len(sys.argv)>1 else 0
+print(rows[idx]['spk'])
+PY
+  "$DEF_INDEX" <<< "$OUTS_JSON")
+  DEF_VALUE=$($SSV python - <<'PY'
+import sys,json
+data=json.loads(sys.stdin.read())
+rows=data['post'] if isinstance(data,dict) and 'post' in data else data
+idx=int(sys.argv[1]) if len(sys.argv)>1 else 0
+print(rows[idx]['value'])
+PY
+  "$DEF_INDEX" <<< "$OUTS_JSON")
+  echo "Defaulting to index=$DEF_INDEX value=$DEF_VALUE"
+fi
+
+read -p "Enter anchor output index [${DEF_INDEX}]: " ANCHOR_INDEX
+ANCHOR_INDEX=${ANCHOR_INDEX:-$DEF_INDEX}
+read -p "Enter anchor SPK hex (TapRet P2TR) [${DEF_SPK}]: " ANCHOR_SPK
+ANCHOR_SPK=${ANCHOR_SPK:-$DEF_SPK}
+read -p "Enter anchor value (sats) [${DEF_VALUE}]: " ANCHOR_VALUE
+ANCHOR_VALUE=${ANCHOR_VALUE:-$DEF_VALUE}
 
 echo "== Verify anchor output =="
 $SSV ssv anchor-verify --psbt-in close.psbt --index "$ANCHOR_INDEX" --spk "$ANCHOR_SPK" --value "$ANCHOR_VALUE"

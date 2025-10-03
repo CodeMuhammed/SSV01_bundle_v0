@@ -78,10 +78,10 @@ Demos (docker, regtest)
 - CSV LIQUIDATE skeleton: `make demo-liq`
 - Use `make docker-up` first to start containers; `make docker-logs` to tail Core logs.
 
-TapRet (lean anchoring)
-- SSV stays Taproot-vault–focused. RGB tooling must supply the TapRet anchor scriptPubKey (hex) and value (sats).
+TapRet (lean anchoring, RGB v0.12)
+- SSV stays Taproot-vault–focused. RGB v0.12 tooling must supply the TapRet anchor scriptPubKey (hex) and value (sats).
 - Recommended minimal flow for CLOSE+REPAY:
-  1) Use your RGB tool to compute the TapRet anchor SPK and choose a dust-safe value.
+  1) Use your RGB v0.12 tool to compute the TapRet anchor SPK and choose a dust-safe value.
   2) Insert that anchor output into the CLOSE PSBT using your wallet or helper scripts.
   3) Verify before finalizing: `ssv anchor-verify --psbt-in close.psbt --index <i> --spk <SPK_HEX> --value <SAT> [--json]`.
   4) Finalize borrower witness with `ssv finalize`.
@@ -91,7 +91,20 @@ TapRet (lean anchoring)
   - Dust: ensure the anchor output value is above network dust thresholds.
   - Optional guard: add `--require-anchor-*` (or `--require-opret-*`) to `ssv finalize` to enforce the anchor is present before witness finalize.
 
-OP_RETURN fallback (optional)
+RGB v0.12 example (TapRet, illustrative)
+- Below is an illustrative flow using the rgb CLI v0.12 to prepare a REPAY transfer anchored with TapRet. Exact flags may vary; consult `rgb --help` for your binary.
+
+1) Prepare/obtain an RGB invoice for the REPAY transition (provider’s receiving invoice).
+2) Use `rgb transfer` with TapRet anchoring to update the CLOSE PSBT and produce a consignment:
+   - The demo script runs this for you once you paste the invoice:
+     - `rgb transfer -n regtest --invoice <INVOICE> --method tapret --psbt close.psbt --consignment out.consig --psbt-out close.psbt`
+   - This embeds the TapRet commitment into the PSBT and produces a consignment for the counterparty.
+3) Auto-detect anchor: the demo script attempts to detect the newly-added anchor by diffing PSBT outputs before/after the transfer, preferring TapRet (P2TR) outputs. It will pre-fill the index/SPK/value for you. You can override them if needed.
+4) Verify and finalize:
+   - `ssv anchor-verify --psbt-in close.psbt --index <ANCHOR_INDEX> --spk <ANCHOR_SPK_HEX> --value <ANCHOR_VALUE>`
+   - `ssv finalize --mode borrower ... [--require-anchor-index <i> --require-anchor-spk <SPK> --require-anchor-value <SAT>]`
+
+OP_RETURN fallback (optional, non-RGB)
 - If TapRet is impractical for your setup, you can anchor with OP_RETURN data instead:
   - Insert an OP_RETURN output into the CLOSE PSBT with your commitment bytes: script = OP_RETURN <data>.
   - Verify: `ssv opret-verify --psbt-in close.psbt --index <i> --data <HEX> [--value 0] [--json]`.
@@ -203,7 +216,7 @@ Quick start
 - Stop containers: `make docker-down`
 
 Notes
-- The `ssv` container image includes Python deps and the `rgb` CLI (compiled via Cargo) so you can attach RGB anchors inside the same container.
+- The `ssv` container image includes Python deps and the `rgb` CLI pinned to v0.12 (installed via Cargo) so you can attach RGB anchors inside the same container.
 - The `bitcoin` service uses regtest with txindex and default RPC auth (see docker-compose.yml). Adjust RPC options as needed.
 - Example scripts still require manual signatures and a control block obtained from your signing wallet.
 

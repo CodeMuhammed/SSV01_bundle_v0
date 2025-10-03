@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libffi-dev libssl-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Rust toolchain and rgb CLI
+# Install Rust toolchain and rgb CLI (pinned to v0.12)
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y \
-  && cargo install rgb
+  && cargo install rgb --locked --version "^0.12"
 
 WORKDIR /app
 COPY . /app
