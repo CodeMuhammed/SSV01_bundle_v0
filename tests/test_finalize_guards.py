@@ -10,7 +10,7 @@ from ssv.cli import main as ssv_main
 def _psbt_available() -> bool:
     try:
         m = importlib.import_module('bitcointx.core.psbt')
-        return hasattr(m, 'PSBT')
+        return any(hasattr(m, attr) for attr in ('PSBT', 'PartiallySignedTransaction'))
     except Exception:
         return False
 
@@ -33,7 +33,8 @@ def run_cli(argv: Sequence[str]) -> str:
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_finalize_anchor_guard_mismatch_raises_early():
     # Build a PSBT with a tx that has a single output that doesn't match the guard
-    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+    psbt_mod = importlib.import_module('bitcointx.core.psbt')
+    PSBT = getattr(psbt_mod, 'PSBT', getattr(psbt_mod, 'PartiallySignedTransaction'))
     core = importlib.import_module('bitcointx.core')
     CTransaction = core.CTransaction
     CTxIn = core.CTxIn
@@ -45,20 +46,15 @@ def test_finalize_anchor_guard_mismatch_raises_early():
     xonly = bytes.fromhex('11'*32)
     spk = bytes.fromhex('5120') + xonly
     tx = CTransaction([CTxIn(COutPoint(lx('00'*32), 0))], [CTxOut(5000, CScript(spk))], 2)
-    psbt = PSBT()
-    if hasattr(psbt, 'tx'):
-        psbt.tx = tx
-    elif hasattr(psbt, 'unsigned_tx'):
-        psbt.unsigned_tx = tx
-    else:
-        pytest.skip('PSBT object has no tx/unsigned_tx attribute')
+    try:
+        psbt = PSBT(unsigned_tx=tx)
+    except Exception:
+        pytest.skip('PSBT implementation rejected minimal unsigned tx')
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, 't.psbt')
         with open(p, 'wt') as f:
             f.write(psbt.to_base64())
-        import pytest as _pytest
-        with _pytest.raises(SystemExit):
-            # finalize will exit due to raised ValueError; pass minimal args, but we expect guard to trigger first
+        with pytest.raises(ValueError, match='Anchor guard failed'):
             run_cli([
                 'finalize', '--mode', 'borrower', '--psbt-in', p, '--psbt-out', os.path.join(td, 'out.psbt'),
                 '--sig', '00'*64, '--preimage', '00'*32, '--control', 'c0' + '33'*32,
@@ -69,7 +65,8 @@ def test_finalize_anchor_guard_mismatch_raises_early():
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_finalize_opret_guard_mismatch_raises_early():
-    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+    psbt_mod = importlib.import_module('bitcointx.core.psbt')
+    PSBT = getattr(psbt_mod, 'PSBT', getattr(psbt_mod, 'PartiallySignedTransaction'))
     core = importlib.import_module('bitcointx.core')
     CTransaction = core.CTransaction
     CTxIn = core.CTxIn
@@ -91,23 +88,18 @@ def test_finalize_opret_guard_mismatch_raises_early():
             return b"\x4e" + n.to_bytes(4, 'little') + b
     opret_spk = b"\x6a" + _pushdata(data)
     tx = CTransaction([CTxIn(COutPoint(lx('00'*32), 0))], [CTxOut(0, CScript(opret_spk))], 2)
-    psbt = PSBT()
-    if hasattr(psbt, 'tx'):
-        psbt.tx = tx
-    elif hasattr(psbt, 'unsigned_tx'):
-        psbt.unsigned_tx = tx
-    else:
-        pytest.skip('PSBT object has no tx/unsigned_tx attribute')
+    try:
+        psbt = PSBT(unsigned_tx=tx)
+    except Exception:
+        pytest.skip('PSBT implementation rejected minimal unsigned tx')
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, 't.psbt')
         with open(p, 'wt') as f:
             f.write(psbt.to_base64())
-        import pytest as _pytest
-        with _pytest.raises(SystemExit):
+        with pytest.raises(ValueError, match='OP_RETURN guard failed'):
             run_cli([
                 'finalize', '--mode', 'borrower', '--psbt-in', p, '--psbt-out', os.path.join(td, 'out.psbt'),
                 '--sig', '00'*64, '--preimage', '00'*32, '--control', 'c0' + '33'*32,
                 '--hash-h', '00'*32, '--borrower-pk', '11'*32, '--csv-blocks', '5', '--provider-pk', '22'*32,
                 '--require-opret-index', '0', '--require-opret-data', 'deadbeef'
             ])
-

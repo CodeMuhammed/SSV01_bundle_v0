@@ -16,7 +16,16 @@ from .hexutil import is_hex_str
 
 def _imp_psbt():
     import importlib
-    return importlib.import_module('bitcointx.core.psbt').PSBT
+    mod = importlib.import_module('bitcointx.core.psbt')
+    cls = getattr(mod, 'PSBT', None)
+    if cls is None:
+        # python-bitcointx >=1.1.4 renamed PSBT to PartiallySignedTransaction.
+        cls = getattr(mod, 'PartiallySignedTransaction', None)
+        if cls is not None:
+            setattr(mod, 'PSBT', cls)
+    if cls is None:
+        raise ImportError('python-bitcointx PSBT API not available (missing PSBT class)')
+    return cls
 
 
 def _imp_core_script_witness():
@@ -70,4 +79,3 @@ def get_input_witness_spk_hex(psbt: Any, index: int = 0) -> str:
 def cscript_witness():
     """Accessor for CScriptWitness class to avoid importing in callers."""
     return _imp_core_script_witness()
-

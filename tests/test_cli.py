@@ -42,13 +42,13 @@ def test_cli_verify_json_success():
     taps_hex = bdata['tapscript_hex']
     # Create a control block & expected SPK using taproot helpers
     from ssv.tapscript import tapleaf_hash_tagged
-    from ssv.taproot import scriptpubkey_from_xonly, compute_output_key_xonly
+    from ssv.taproot import compute_output_key, scriptpubkey_from_xonly
     leaf_ver = 0xC0
     internal = bytes.fromhex('33'*32)
-    ctrl_hex = (bytes([leaf_ver]) + internal).hex()
     leaf = tapleaf_hash_tagged(bytes.fromhex(taps_hex), leaf_ver)
-    qx = compute_output_key_xonly(internal, leaf, [])
+    qx, parity = compute_output_key(internal, leaf, [])
     spk_hex = scriptpubkey_from_xonly(qx).hex()
+    ctrl_hex = (bytes([(leaf_ver & 0xFE) | parity]) + internal).hex()
     vout = run_cli(['verify-path', '--tapscript', taps_hex, '--control', ctrl_hex, '--witness-spk', spk_hex, '--json'])
     vdata = json.loads(vout)
     assert vdata['ok'] is True and vdata['expected_spk'] == spk_hex and vdata['actual_spk'] == spk_hex

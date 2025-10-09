@@ -34,7 +34,7 @@ def test_policy_invalid_hex_lengths(field: str, val: str) -> None:
         p.validate()
 
 
-@pytest.mark.parametrize('csv', [cast(Any, '-1'), -5, 0])
+@pytest.mark.parametrize('csv', [cast(Any, '-1'), -5, 0, 70000])
 def test_policy_invalid_csv_blocks(csv: Any) -> None:
     p = PolicyParams(hash_h='aa'*32, borrower_xonly='bb'*32, provider_xonly='cc'*32, csv_blocks=csv)
     with pytest.raises(ValueError):

@@ -11,7 +11,7 @@ from ssv.cli import main as ssv_main
 def _psbt_available() -> bool:
     try:
         m = importlib.import_module('bitcointx.core.psbt')
-        return hasattr(m, 'PSBT')
+        return any(hasattr(m, attr) for attr in ('PSBT', 'PartiallySignedTransaction'))
     except Exception:
         return False
 
@@ -45,7 +45,8 @@ def _pushdata(b: bytes) -> bytes:
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_opret_verify_positive_and_mismatch():
-    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+    psbt_mod = importlib.import_module('bitcointx.core.psbt')
+    PSBT = getattr(psbt_mod, 'PSBT', getattr(psbt_mod, 'PartiallySignedTransaction'))
     core = importlib.import_module('bitcointx.core')
     CTransaction = core.CTransaction
     CTxIn = core.CTxIn
@@ -58,13 +59,10 @@ def test_opret_verify_positive_and_mismatch():
     opret_spk = b"\x6a" + _pushdata(data)
     tx = CTransaction([CTxIn(COutPoint(lx('00'*32), 0))], [CTxOut(0, CScript(opret_spk))], 2)
 
-    psbt = PSBT()
-    if hasattr(psbt, 'tx'):
-        psbt.tx = tx
-    elif hasattr(psbt, 'unsigned_tx'):
-        psbt.unsigned_tx = tx
-    else:
-        pytest.skip('PSBT object has no tx/unsigned_tx attribute')
+    try:
+        psbt = PSBT(unsigned_tx=tx)
+    except Exception:
+        pytest.skip('PSBT implementation rejected minimal unsigned tx')
 
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, 't.psbt')
@@ -79,4 +77,3 @@ def test_opret_verify_positive_and_mismatch():
         out2 = run_cli(['opret-verify', '--psbt-in', p, '--index', '0', '--data', 'deadbeef', '--json'])
         j2 = json.loads(out2)
         assert j2['ok'] is False and j2['reason'] == 'spk mismatch'
-

@@ -7,6 +7,22 @@ two-branch Taproot policy used by this toolkit.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+MAX_CSV_BLOCKS = 0xFFFF  # BIP-68 block-based CSV uses low 16 bits only
+
+
+def normalize_csv_blocks(value: Any) -> int:
+    """Coerce CSV blocks to int and enforce the BIP-68 constraints."""
+    try:
+        n = int(value)
+    except Exception as exc:  # pragma: no cover - defensive, rethrown below
+        raise ValueError("csv_blocks must be an integer") from exc
+    if n <= 0:
+        raise ValueError("csv_blocks must be a positive integer")
+    if n > MAX_CSV_BLOCKS:
+        raise ValueError(f"csv_blocks must be <= {MAX_CSV_BLOCKS} (BIP-68 block-based CSV limit)")
+    return n
 
 
 @dataclass
@@ -17,7 +33,7 @@ class PolicyParams:
         hash_h: 32-byte hex string of sha256(s) preimage commitment.
         borrower_xonly: 32-byte hex x-only pubkey for CLOSE path.
         provider_xonly: 32-byte hex x-only pubkey for LIQUIDATE path.
-        csv_blocks: positive integer for CSV timelock (blocks).
+        csv_blocks: positive integer (1-65535) for CSV timelock (blocks).
     """
     hash_h: str
     borrower_xonly: str
@@ -32,11 +48,4 @@ class PolicyParams:
             raise ValueError("borrower_xonly must be 32-byte hex (x-only)")
         if not is_hex_str(self.provider_xonly) or len(self.provider_xonly) != 64:
             raise ValueError("provider_xonly must be 32-byte hex (x-only)")
-        # Accept any int-like value; coerce and validate positivity
-        try:
-            n = int(self.csv_blocks)
-        except Exception:
-            raise ValueError("csv_blocks must be an integer")
-        if n <= 0:
-            raise ValueError("csv_blocks must be a positive integer")
-        self.csv_blocks = n
+        self.csv_blocks = normalize_csv_blocks(self.csv_blocks)

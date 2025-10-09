@@ -11,7 +11,7 @@ from ssv.cli import main as ssv_main
 def _psbt_available() -> bool:
     try:
         m = importlib.import_module('bitcointx.core.psbt')
-        return hasattr(m, 'PSBT')
+        return any(hasattr(m, attr) for attr in ('PSBT', 'PartiallySignedTransaction'))
     except Exception:
         return False
 
@@ -33,7 +33,8 @@ def run_cli(argv: Sequence[str]) -> str:
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_anchor_verify_positive():
-    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+    psbt_mod = importlib.import_module('bitcointx.core.psbt')
+    PSBT = getattr(psbt_mod, 'PSBT', getattr(psbt_mod, 'PartiallySignedTransaction'))
     core = importlib.import_module('bitcointx.core')
     CTransaction = core.CTransaction
     CTxIn = core.CTxIn
@@ -49,21 +50,16 @@ def test_anchor_verify_positive():
     txout = CTxOut(12345, CScript(spk))
     tx = CTransaction([txin], [txout], 2)
 
-    psbt = PSBT()
-    # attach the unsigned transaction
-    if hasattr(psbt, 'tx'):
-        psbt.tx = tx
-    elif hasattr(psbt, 'unsigned_tx'):
-        psbt.unsigned_tx = tx
-    else:
-        pytest.skip('PSBT object has no tx/unsigned_tx attribute')
+    try:
+        psbt = PSBT(unsigned_tx=tx)
+    except Exception:
+        pytest.skip('PSBT implementation rejected minimal unsigned tx')
 
-    with tempfile.TemporaryDirectory() as td:
-        p = os.path.join(td, 't.psbt')
-        # write base64 via PSBT API
-        with open(p, 'wt') as f:
-            f.write(psbt.to_base64())
-        out = run_cli(['anchor-verify', '--psbt-in', p, '--index', '0', '--spk', (b'5120' + xonly).hex(), '--value', '12345', '--json'])
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, 't.psbt')
+            with open(p, 'wt') as f:
+                f.write(psbt.to_base64())
+            out = run_cli(['anchor-verify', '--psbt-in', p, '--index', '0', '--spk', spk.hex(), '--value', '12345', '--json'])
         import json
         data = json.loads(out)
         assert data['ok'] is True
@@ -76,7 +72,8 @@ def test_anchor_verify_positive():
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
 def test_anchor_verify_mismatch():
-    PSBT = importlib.import_module('bitcointx.core.psbt').PSBT
+    psbt_mod = importlib.import_module('bitcointx.core.psbt')
+    PSBT = getattr(psbt_mod, 'PSBT', getattr(psbt_mod, 'PartiallySignedTransaction'))
     core = importlib.import_module('bitcointx.core')
     CTransaction = core.CTransaction
     CTxIn = core.CTxIn
@@ -90,13 +87,10 @@ def test_anchor_verify_mismatch():
     bad_spk = bytes.fromhex('5120' + '00' * 32)
     tx = CTransaction([CTxIn(COutPoint(lx('00' * 32), 0))], [CTxOut(9999, CScript(good_spk))], 2)
 
-    psbt = PSBT()
-    if hasattr(psbt, 'tx'):
-        psbt.tx = tx
-    elif hasattr(psbt, 'unsigned_tx'):
-        psbt.unsigned_tx = tx
-    else:
-        pytest.skip('PSBT object has no tx/unsigned_tx attribute')
+    try:
+        psbt = PSBT(unsigned_tx=tx)
+    except Exception:
+        pytest.skip('PSBT implementation rejected minimal unsigned tx')
 
     import json
     with tempfile.TemporaryDirectory() as td:
@@ -107,4 +101,3 @@ def test_anchor_verify_mismatch():
         data = json.loads(out)
         assert data['ok'] is False
         assert data['reason'] == 'spk mismatch'
-

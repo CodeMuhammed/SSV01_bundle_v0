@@ -7,14 +7,15 @@ output scriptPubKey and compare with an actual witness_utxo spk.
 from __future__ import annotations
 
 import binascii
-from typing import Tuple, List, Optional, TypedDict
+from typing import Optional, TypedDict
 
 from .tapscript import tapleaf_hash_tagged
-from .taproot import parse_control_block_hex, compute_output_key_xonly, scriptpubkey_from_xonly
-
-
-def _parse_control_block(cb_hex: str) -> Tuple[int, bytes, List[bytes]]:
-    return parse_control_block_hex(cb_hex)
+from .taproot import (
+    ControlBlock,
+    compute_output_key,
+    parse_control_block_hex,
+    scriptpubkey_from_xonly,
+)
 
 
 class VerifyResult(TypedDict):
@@ -26,10 +27,10 @@ class VerifyResult(TypedDict):
 
 def verify_taproot_path(tapscript_hex: str, control_block_hex: str, witness_spk_hex: str) -> VerifyResult:
     script = binascii.unhexlify(tapscript_hex)
-    leaf_ver, xonly, nodes = _parse_control_block(control_block_hex)
-    leaf = tapleaf_hash_tagged(script, leaf_ver)
+    cb: ControlBlock = parse_control_block_hex(control_block_hex)
+    leaf = tapleaf_hash_tagged(script, cb.leaf_version)
     try:
-        qx = compute_output_key_xonly(xonly, leaf, nodes)
+        qx, parity = compute_output_key(cb.internal_key, leaf, cb.merkle_nodes)
         expected_spk = scriptpubkey_from_xonly(qx).hex()
     except Exception as e:
         return {
@@ -38,6 +39,15 @@ def verify_taproot_path(tapscript_hex: str, control_block_hex: str, witness_spk_
             'actual_spk': witness_spk_hex.lower(),
             'reason': str(e),
         }
+
+    if parity != cb.parity:
+        return {
+            'ok': False,
+            'expected_spk': expected_spk,
+            'actual_spk': witness_spk_hex.lower(),
+            'reason': 'control block parity mismatch',
+        }
+
     actual_spk = witness_spk_hex.lower()
     ok = (expected_spk == actual_spk)
     return {

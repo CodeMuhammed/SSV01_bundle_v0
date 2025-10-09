@@ -1,121 +1,159 @@
 SSV — Taproot Vault Toolkit (Lean)
 
-- Two-path policy in one tapscript:
-  - CLOSE: sha256(s)=h + borrower signature
-  - LIQUIDATE: CSV timelock + provider signature
+## Why SSV exists
+SSV gives borrowers and liquidity providers a minimal, auditable Taproot vault workflow that can be coupled with RGB or other covenant layers. The toolkit focuses on:
+- A two-branch Taproot script that enforces either atomic repayment (`CLOSE`) or timelocked liquidation (`LIQUIDATE`).
+- CLI helpers to build the tapscript, verify Taproot paths/control blocks, and finalize PSBTs with strong optional guards (TapRet/OP_RETURN anchors).
+- Thin Python modules that you can reuse from your own orchestration code.
 
-Flow
-```mermaid
-graph TD
-  T[Terms] --> F[Fund BTC Vault]
-  F --> RC[Repay and Close]
-  F -->|No repay by deadline| L[CSV Liquidate]
+If you understand the high-level flow below, the rest of the repository will feel familiar.
+
 ```
-Note: USDT (RGB) moves at DISBURSE (provider→borrower) and at REPAY (borrower→provider). REPAY is co‑anchored to the Close tx that reveals `s` (sha256(s)=`h`) for atomic settlement.
+Borrower funds vault  ─┬─> Provider sees collateral locked under Taproot policy
+                       │
+                       ├─> Repay path (happy):
+                       │      • Borrower reveals preimage `s` in CLOSE spend
+                       │      • RGB TapRet anchor assures provider receives principal+interest
+                       │      • Borrower reclaims BTC collateral
+                       │
+                       └─> Liquidation (default):
+                              • If borrower fails to repay before CSV expires
+                              • Provider waits `csv_blocks` then spends LIQUIDATE branch
+                              • Provider receives BTC collateral on L1
+```
 
-Primitive (Taproot policy)
+## Core policy at a glance
+The tapscript that SSV builds is intentionally simple:
+
 ```
 OP_IF
   OP_SHA256 `h` OP_EQUALVERIFY
-  `pk_b` OP_CHECKSIG
+  `pk_b` OP_CHECKSIG        # Borrower must reveal preimage `s` such that sha256(s)=h
 OP_ELSE
   `csv_blocks` OP_CHECKSEQUENCEVERIFY OP_DROP
-  `pk_p` OP_CHECKSIG
+  `pk_p` OP_CHECKSIG        # Provider can claim after the CSV delay
 OP_ENDIF
 ```
 
-Witness stacks (script‑path)
-- Borrower (CLOSE): `[sig_b, s, 0x01, tapscript, control]`
-- Provider (LIQUIDATE): `[sig_p, 0x00, tapscript, control]`
+- **Borrower path (CLOSE)**: witness stack `[sig_b, s, 0x01, tapscript, control]`
+- **Provider path (LIQUIDATE)**: witness stack `[sig_p, 0x00, tapscript, control]`
 
-Parameters to agree
-- `h = sha256(s)` (32B preimage `s`)
-- `csv_blocks` (relative blocks for LIQUIDATE)
-- `pk_b`, `pk_p` (x‑only Taproot keys)
-- `principal_usdt`, `interest_usdt`
-- Optional: `maturity_height` (RGB‑side guard only)
+Shared parameters the parties must agree on:
 
-End‑to‑end summary
-1) Borrower funds BTC Taproot vault (policy above).
-2) Provider DISBURSE: transfers `principal_usdt` on RGB to the borrower.
-3) Repay and Close (preferred): single anchor tx that spends the vault via CLOSE (reveals `s`) and anchors RGB REPAY (verifies `sha256(s)=h` and pays provider ≥ principal+interest); BTC returns to borrower.
-4) If no repay by deadline: provider LIQUIDATE after `csv_blocks` via the CSV branch to claim BTC.
+| Parameter | Purpose |
+|-----------|---------|
+| `h` | Commitment to borrower’s preimage `s` (`h = sha256(s)`) |
+| `csv_blocks` | Relative timelock for provider liquidation (BIP-68 range 1–65535) |
+| `pk_b`, `pk_p` | X-only Taproot keys for borrower/provider script branches |
+| `principal_usdt`, `interest_usdt` | RGB settlement terms (off-chain agreement) |
+| Optional `maturity_height` | Extra RGB-side guard if desired |
 
-CLI quick start (docker)
-- Build tapscript (human output or JSON with --json):
-  `docker compose exec ssv ssv build-tapscript --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --disasm [--json]`
-- Finalize PSBT (borrower):
-  `docker compose exec ssv ssv finalize --mode borrower --psbt-in close.psbt --psbt-out close.final.psbt --tx-out close.final.tx --sig \`SIG_B\` --preimage \`s\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\` [--require-anchor-index i --require-anchor-spk SPK --require-anchor-value SAT]`
-- Finalize PSBT (provider):
-  `docker compose exec ssv ssv finalize --mode provider --psbt-in liq.psbt --psbt-out liq.final.psbt --tx-out liq.final.tx --sig \`SIG_P\` --hash-h \`h\` --borrower-pk \`xonly_b\` --csv-blocks \`csv_blocks\` --provider-pk \`xonly_p\` --control \`CTRL\``
+## Repository map
 
-Implementation notes (concise)
-- RGB coupling: DISBURSE (provider→borrower), REPAY (borrower→provider). Co‑anchor REPAY with CLOSE and check `sha256(s)=h`. CSV liquidation is L1 only.
-- PSBT plans:
-  - CLOSE+REPAY: inputs = vault UTXO (+ fees); outputs = borrower BTC (+ change); attach RGB REPAY anchor; finalize `[sig_b, s, 0x01, tapscript, control]`.
-  - LIQUIDATE: input = vault UTXO with `nSequence=csv_blocks`; output = provider BTC; finalize `[sig_p, 0x00, tapscript, control]`.
-  - CSV steps: wait ≥ `csv_blocks` confs; PSBT `nSequence=csv_blocks` (v≥2); finalize provider witness; broadcast.
+| Path | Description |
+|------|-------------|
+| `src/ssv/tapscript.py` | Builds tapscript bytes, TapLeaf hashes, disassembly. |
+| `src/ssv/policy.py` | Validates high-level policy parameters (`PolicyParams`). |
+| `src/ssv/taproot.py` | Taproot control block parsing, TapTweak computation, scriptPubKey helpers. |
+| `src/ssv/witness.py` | Builds borrower/provider script-path witness stacks with input validation. |
+| `src/ssv/psbtio.py` | python-bitcointx shims for loading/writing PSBTs, converting to raw hex. |
+| `src/ssv/cli.py` | Entry point for `ssv` command: build tapscript, finalize PSBTs, verify anchors. |
+| `examples/` | Regtest helper scripts (`make demo-close`, `make demo-liq`). |
+| `tests/` | Pytest suite covering every CLI subcommand and taproot/tapscript primitive. |
 
-Control block (where to get it)
-- Use descriptor wallets (Taproot tr()), then build PSBTs with your wallet. When you select the script‑path spend, most wallets include the Taproot leaf script and control block in PSBT fields. Export the control block hex and pass it to the CLI finalize step.
-- If your stack doesn’t expose control blocks directly, consult the wallet’s PSBT export or signing API. The control block must match the tapscript leaf and internal key used in the descriptor.
+## Typical lifecycle
 
-CSV encoding (quick ref)
-- nSequence is a 32‑bit field; for block‑based CSV:
-  - Disable flag (bit 31) = 0
-  - Type flag (bit 22) = 0 (blocks, not time)
-  - Value = `csv_blocks` in low 16 bits
-- Example: `csv_blocks = 144` → nSequence = `0x00000090`; tx version must be ≥ 2.
+1. **Agree on policy**  
+   Select borrower/provider keys, choose `csv_blocks`, draw a random `s` (preimage) and compute `h = sha256(s)`.  
+   Use `ssv build-tapscript` to render the tapscript and verify the TapLeaf hash matches what goes on-chain.
 
-Path verification (optional)
-- Verify tapscript/control against the witness UTXO scriptPubKey (human output or JSON with --json):
-  - With PSBT: `docker compose exec ssv ssv verify-path --tapscript-file tapscript.hex --control-file control.hex --psbt-in input.psbt [--json]`
-  - Or direct SPK: `docker compose exec ssv ssv verify-path --tapscript <HEX> --control <HEX> --witness-spk <HEX> [--json]`
-- Output shows ok / expected_spk / actual_spk and a reason on mismatch.
+2. **Fund the Taproot vault**  
+   Import the descriptor into the vault wallet (`tr(internal, { …script branches… })`), fund the P2TR output, and share the resulting UTXO details.
 
-Demos (docker, regtest)
-- CLOSE+REPAY skeleton (prompts to attach RGB anchor): `make demo-close`
-- CSV LIQUIDATE skeleton: `make demo-liq`
-- Use `make docker-up` first to start containers; `make docker-logs` to tail Core logs.
+3. **Attach RGB anchor (optional but expected)**  
+   While preparing the borrower’s CLOSE PSBT, add a TapRet or OP_RETURN anchor tying the repayment transfer to the on-chain spend.
 
-TapRet (lean anchoring, RGB v0.12)
-- SSV stays Taproot-vault–focused. RGB v0.12 tooling must supply the TapRet anchor scriptPubKey (hex) and value (sats).
-- Recommended minimal flow for CLOSE+REPAY:
-  1) Use your RGB v0.12 tool to compute the TapRet anchor SPK and choose a dust-safe value.
-  2) Insert that anchor output into the CLOSE PSBT using your wallet or helper scripts.
-  3) Verify before finalizing: `ssv anchor-verify --psbt-in close.psbt --index <i> --spk <SPK_HEX> --value <SAT> [--json]`.
-  4) Finalize borrower witness with `ssv finalize`.
-- Notes:
-  - Use a dedicated anchor output at a known index to avoid wallet coordination.
-  - Keep the anchor output (index, spk, value) identical across RBF bumps.
-  - Dust: ensure the anchor output value is above network dust thresholds.
-  - Optional guard: add `--require-anchor-*` (or `--require-opret-*`) to `ssv finalize` to enforce the anchor is present before witness finalize.
+4. **Finalize borrower PSBT**  
+   Run `ssv finalize --mode borrower ...` supplying:
+   - Borrower signature (`sig_b`)
+   - `s` (preimage)
+   - Control block and tapscript (or have the CLI rebuild tapscript from parameters)
+   - Optional guards `--require-anchor-*` or `--require-opret-*` so the script refuses to finalize if the anchor is missing.
 
-RGB v0.12 example (TapRet, illustrative)
-- Below is an illustrative flow using the rgb CLI v0.12 to prepare a REPAY transfer anchored with TapRet. Exact flags may vary; consult `rgb --help` for your binary.
+5. **Liquidation fallback**  
+   If repayment fails, the provider constructs a PSBT with `nSequence = csv_blocks` on the vault input, signs with `pk_p`, and finalizes via `ssv finalize --mode provider ...`.
 
-1) Prepare/obtain an RGB invoice for the REPAY transition (provider’s receiving invoice).
-2) Use `rgb transfer` with TapRet anchoring to update the CLOSE PSBT and produce a consignment:
-   - The demo script runs this for you once you paste the invoice:
-     - `rgb transfer -n regtest --invoice <INVOICE> --method tapret --psbt close.psbt --consignment out.consig --psbt-out close.psbt`
-   - This embeds the TapRet commitment into the PSBT and produces a consignment for the counterparty.
-3) Auto-detect anchor: the demo script attempts to detect the newly-added anchor by diffing PSBT outputs before/after the transfer, preferring TapRet (P2TR) outputs. It will pre-fill the index/SPK/value for you. You can override them if needed.
-4) Verify and finalize:
-   - `ssv anchor-verify --psbt-in close.psbt --index <ANCHOR_INDEX> --spk <ANCHOR_SPK_HEX> --value <ANCHOR_VALUE>`
-   - `ssv finalize --mode borrower ... [--require-anchor-index <i> --require-anchor-spk <SPK> --require-anchor-value <SAT>]`
+6. **Auditability**  
+   Additional commands (`verify-path`, `anchor-verify`, `opret-verify`) let either side prove the control block matches the P2TR output and the anchor outputs are still intact before signatures are revealed.
 
-OP_RETURN fallback (optional, non-RGB)
-- If TapRet is impractical for your setup, you can anchor with OP_RETURN data instead:
-  - Insert an OP_RETURN output into the CLOSE PSBT with your commitment bytes: script = OP_RETURN <data>.
-  - Verify: `ssv opret-verify --psbt-in close.psbt --index <i> --data <HEX> [--value 0] [--json]`.
-  - Then finalize as usual.
+## CLI reference
 
-Verify-path dependency
-- The `ssv` container includes coincurve; `verify-path` works out of the box.
+```
+ssv build-tapscript  --hash-h <H> --borrower-pk <XONLY_B> --csv-blocks <N> --provider-pk <XONLY_P> [--disasm] [--json]
+ssv finalize         --mode {borrower|provider} --psbt-in <PATH> --psbt-out <PATH> --sig <SIG> --control <HEX|FILE> \
+                     [--preimage <S>] [--tapscript <HEX|FILE> | --hash-h/--borrower-pk/--csv-blocks/--provider-pk] \
+                     [--tx-out <RAW_TX_FILE>] \
+                     [--require-anchor-index <I> --require-anchor-spk <HEX> --require-anchor-value <SAT>] \
+                     [--require-opret-index <I> --require-opret-data <HEX> --require-opret-value <SAT>]
+ssv verify-path      --tapscript <HEX|FILE> --control <HEX|FILE> (--witness-spk <HEX> | --psbt-in <PATH>) [--json]
+ssv anchor-verify    --psbt-in <PATH> --index <I> --spk <HEX> --value <SAT> [--json]
+ssv opret-verify     --psbt-in <PATH> --index <I> --data <HEX> [--value <SAT>] [--json]
+ssv anchor-show      --psbt-in <PATH> [--json]
+```
 
-Appendix
+### Key CLI idioms
+- Supply hex directly or via files using `--tapscript` / `--tapscript-file`, `--control` / `--control-file`.
+- When `python-bitcointx` exposes `PartiallySignedTransaction` instead of `PSBT`, SSV adapts automatically.
+- Add `--json` to get machine-friendly output for automation.
+- `finalize --tx-out` dumps a fully signed raw transaction if the PSBT is now broadcast-ready (subject to python-bitcointx capabilities).
 
-Descriptor example (Taproot)
+## RGB anchoring
+
+### TapRet (preferred)
+1. Use RGB tooling (v0.12) to compute the TapRet anchor scriptPubKey and value—choose a dust-safe amount.
+2. Insert the anchor output in the borrower CLOSE PSBT before signatures.
+3. `ssv anchor-verify` to assert index/SPK/value are still present.
+4. `ssv finalize --require-anchor-*` so the borrower cannot finalize without the anchor or if an RBF rewrite drops it.
+
+### OP_RETURN fallback
+If TapRet support is unavailable, you may anchor via an OP_RETURN output:
+1. Add `OP_RETURN <DATA>` output to the repayment PSBT.
+2. `ssv opret-verify` to ensure the commitment is intact.
+3. Use the same guard flags when finalizing.
+
+## Working with control blocks
+- Descriptor wallets usually export the Taproot leaf script and control block when you select a script-path spend.
+- Ensure the control block’s internal key matches the descriptor’s internal key and the merkle path/parity correspond to your leaf.
+- `ssv verify-path` recomputes the Taproot tweak and parity; it fails fast if the control block is malformed.
+
+## CSV quick facts
+- `csv_blocks` lives in the low 16 bits of nSequence (`0x0000NNNN`), type flag = 0 (block-based).
+- Transactions must be version ≥ 2 for CSV to activate.
+- Provider-side PSBT should set `nSequence = csv_blocks` and wait until the vault input has that many confirmations.
+
+## Development & tests
+
+Create a virtualenv (optional but recommended):
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Run the full test suite:
+```
+pytest -q
+```
+
+Highlights from `tests/`:
+- `test_taproot.py` validates control block parsing, TapTweak parity detection, and coincurve fallbacks.
+- `test_cli.py`, `test_finalize_guards.py`, `test_anchor_verify.py`, `test_opret_verify.py` cover CLI contract-level behaviour, including guard failures and JSON output.
+- `test_psbtio.py` ensures python-bitcointx shims work for both legacy `PSBT` and new `PartiallySignedTransaction` APIs.
+
+The repository assumes coincurve and python-bitcointx are available. Docker images (see `docker-compose.yml`) bundle these dependencies for deterministic demos.
+
+## Appendix: descriptor template
+
 ```
 tr(
   `internal_pub`,
@@ -125,39 +163,54 @@ tr(
   }
 )
 ```
-Use Core’s `getdescriptorinfo` to checksum/canonicalize, then `importdescriptors` into the vault wallet.
 
-Key derivation tips (Core via docker)
-- Internal key (`internal_pub`) for tr():
-  - `VAULT_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getnewaddress "" bech32m)`
-  - `INTERNAL_PUB=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | jq -r .pubkey)`  # 33‑byte compressed
-- X‑only keys for tapscript pk():
-  - Borrower: `BORR_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getnewaddress "" bech32m)`
-  - `BORR_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | jq -r .pubkey)`
-  - `pk_b=${BORR_COMP:2}`  # drop leading 02/03 to get 32‑byte x‑only
-  - Provider: `PROV_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getnewaddress "" bech32m)`
-  - `PROV_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | jq -r .pubkey)`
-  - `pk_p=${PROV_COMP:2}`
-Notes: tr() uses the 33‑byte internal compressed pubkey; tapscript pk() uses 32‑byte x‑only keys.
+Use `getdescriptorinfo` to canonicalize and checksum before calling `importdescriptors`.
 
-No jq? Alternatives (via docker)
-- Python one‑liner (recommended):
-  - Internal: `INTERNAL_PUB=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
-  - Borrower: `BORR_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
-  - Provider: `PROV_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | python3 -c 'import sys,json; print(json.load(sys.stdin)["pubkey"])')`
+### Deriving keys with Core (regtest, docker)
 
-Helper script
-- Derive keys conveniently from loaded wallets via the container:
-  - `docker compose exec -T ssv python tools/derive_keys.py --all`  # vault/borrower/provider (new bech32m addresses)
-  - `docker compose exec -T ssv python tools/derive_keys.py --wallet vault --new`
-  - `docker compose exec -T ssv python tools/derive_keys.py --wallet borrower --address <BECH32M>`
+```
+# Internal key for tr()
+VAULT_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getnewaddress "" bech32m)
+INTERNAL_PUB=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | jq -r .pubkey)
 
-Compute preimage and hash (s and h)
-- Random 32‑byte preimage `s` and its SHA‑256 `h` (bash + OpenSSL):
-  - `s=$(openssl rand -hex 32)`
-  - `h=$(printf "%s" "$s" | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 256)`
-- Python alternative:
-  - `python - <<'PY'\nimport os,hashlib; s=os.urandom(32).hex(); h=hashlib.sha256(bytes.fromhex(s)).hexdigest(); print('s=',s); print('h=',h)\nPY`
+# Borrower / provider x-only keys for tapscript
+BORR_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getnewaddress "" bech32m)
+BORR_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | jq -r .pubkey)
+pk_b=${BORR_COMP:2}
+
+PROV_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getnewaddress "" bech32m)
+PROV_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | jq -r .pubkey)
+pk_p=${PROV_COMP:2}
+```
+
+If `jq` is unavailable, Python one-liners inside the container offer the same functionality (see `README` history or `tools/derive_keys.py`).
+
+### Generating preimage and hash
+
+```
+s=$(openssl rand -hex 32)
+h=$(printf "%s" "$s" | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 256)
+# or
+python - <<'PY'
+import os, hashlib
+s = os.urandom(32).hex()
+h = hashlib.sha256(bytes.fromhex(s)).hexdigest()
+print("s =", s)
+print("h =", h)
+PY
+```
+
+---
+
+For a complete walkthrough, run the regtest demos:
+
+```
+make docker-up
+make demo-close   # borrower repayment flow (prompts for RGB anchor)
+make demo-liq     # provider liquidation after CSV
+```
+
+They build the descriptor, fund the Taproot vault, guide you through the RGB anchor insertion, and show how to finalize both borrower and provider PSBTs using the CLI commands described above.
 - Use `h` when building the tapscript and keep `s` for CLOSE (borrower path).
 
 

@@ -33,12 +33,12 @@ def test_cli_verify_json_mismatch():
 
     # Construct control block for the path
     from ssv.tapscript import tapleaf_hash_tagged
-    from ssv.taproot import compute_output_key_xonly
+    from ssv.taproot import compute_output_key
     leaf_ver = 0xC0
     internal = bytes.fromhex('33'*32)
-    ctrl_hex = (bytes([leaf_ver]) + internal).hex()
     leaf = tapleaf_hash_tagged(bytes.fromhex(taps_hex), leaf_ver)
-    _ = compute_output_key_xonly(internal, leaf, [])  # ensure coincurve path operational
+    _, parity = compute_output_key(internal, leaf, [])  # ensure coincurve path operational
+    ctrl_hex = (bytes([(leaf_ver & 0xFE) | parity]) + internal).hex()
 
     # Provide a wrong spk (flip one nibble)
     wrong_spk = '5120' + ('00'*31)  # invalid but structurally correct length

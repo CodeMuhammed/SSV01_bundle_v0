@@ -1,3 +1,5 @@
+import pytest
+
 from ssv.tapscript import build_tapscript, tapleaf_hash, tapleaf_hash_tagged, disasm
 
 
@@ -29,3 +31,11 @@ def test_build_tapscript_and_hashes():
     # Basic disasm sanity
     d = disasm(script)
     assert 'OP_IF' in d and 'OP_ELSE' in d and 'OP_ENDIF' in d
+
+
+def test_build_tapscript_rejects_large_csv():
+    h = '00' * 32
+    pb = '11' * 32
+    pp = '22' * 32
+    with pytest.raises(ValueError):
+        build_tapscript(h, pb, 70000, pp)

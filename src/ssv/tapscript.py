@@ -23,6 +23,8 @@ import binascii
 import hashlib
 from typing import Dict
 
+from .policy import MAX_CSV_BLOCKS
+
 # Opcodes
 OP_IF = 0x63
 OP_ELSE = 0x67
@@ -86,6 +88,8 @@ def build_tapscript(hash_h_hex: str, borrower_pk_hex: str, csv_blocks: int, prov
         raise ValueError("borrower_pk and provider_pk must be 32-byte x-only pubkeys (hex)")
     if csv_blocks <= 0:
         raise ValueError("csv_blocks must be positive")
+    if csv_blocks > MAX_CSV_BLOCKS:
+        raise ValueError(f"csv_blocks must be <= {MAX_CSV_BLOCKS} (BIP-68 block-based CSV limit)")
 
     script = bytearray()
     script += bytes([OP_IF])

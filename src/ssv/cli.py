@@ -279,7 +279,7 @@ def finalize_witness(args: argparse.Namespace) -> None:
     if args.mode == 'borrower':
         if not args.preimage:
             raise ValueError("--preimage required in borrower mode")
-        preimage = parse_hex('preimage', args.preimage)
+        preimage = parse_hex('preimage', args.preimage, length=32)
         stack_items = build_witness(Branch.CLOSE, sig, tapscript, control, preimage=preimage)
     else:
         stack_items = build_witness(Branch.LIQUIDATE, sig, tapscript, control)
@@ -322,7 +322,7 @@ def main():
     ap_b = sub.add_parser('build-tapscript', help='build the tapscript and compute tapleaf hash')
     ap_b.add_argument('--hash-h', required=True, help='32B hex, SHA256(s)')
     ap_b.add_argument('--borrower-pk', required=True, help='32B hex x-only pubkey')
-    ap_b.add_argument('--csv-blocks', required=True, type=int, help='relative timelock in blocks')
+    ap_b.add_argument('--csv-blocks', required=True, type=int, help='relative timelock in blocks (1-65535, BIP-68)')
     ap_b.add_argument('--provider-pk', required=True, help='32B hex x-only pubkey')
     ap_b.add_argument('--disasm', action='store_true', help='print simple disassembly')
     ap_b.add_argument('--json', action='store_true', help='print JSON output')
@@ -342,7 +342,7 @@ def main():
     ap_f.add_argument('--tapscript-file', help='read tapscript hex from file')
     ap_f.add_argument('--hash-h', help='if no --tapscript, provide these to build tapscript')
     ap_f.add_argument('--borrower-pk', help='x-only, 32B hex')
-    ap_f.add_argument('--csv-blocks', type=int, help='relative timelock blocks')
+    ap_f.add_argument('--csv-blocks', type=int, help='relative timelock blocks (1-65535, BIP-68)')
     ap_f.add_argument('--provider-pk', help='x-only, 32B hex')
     # Optional guards to enforce anchors before finalizing
     ap_f.add_argument('--require-anchor-index', type=int, help='require a TapRet anchor at this output index')
