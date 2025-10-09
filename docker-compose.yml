@@ -1,34 +1,27 @@
 version: "3.8"
 
 services:
-  bitcoin:
-    image: ruimarinho/bitcoin-core:27.0
-    command: >-
-      -regtest
-      -server
-      -txindex=1
-      -fallbackfee=0.0002
-      -rpcauth=rpcuser:269c8d35709b3f3f99bba3be5c9cd87b$1e7a6ff0a9df1a0dbb2a705fc86e2b903b5a6f90dfecb5b3c1b0f8efba4202e0
-      -rpcallowip=::/0
-      -rpcbind=0.0.0.0
-      -zmqpubrawblock=tcp://0.0.0.0:28332
-      -zmqpubrawtx=tcp://0.0.0.0:28333
-    ports:
-      - "18443:18443"  # RPC
-      - "18444:18444"  # P2P
-    volumes:
-      - bitcoin-data:/home/bitcoin/.bitcoin
-
   ssv:
     build: .
-    depends_on:
-      - bitcoin
     working_dir: /app
+    environment:
+      BITCOIN_RPCUSER: ${BITCOIN_RPCUSER:-ssv}
+      BITCOIN_RPCPASS: ${BITCOIN_RPCPASS:-ssvpass}
+      BITCOIN_RPCPORT: ${BITCOIN_RPCPORT:-18443}
+      BITCOIN_P2PPORT: ${BITCOIN_P2PPORT:-18444}
+      BITCOIN_ZMQ_BLOCK: ${BITCOIN_ZMQ_BLOCK:-28332}
+      BITCOIN_ZMQ_TX: ${BITCOIN_ZMQ_TX:-28333}
+    ports:
+      - "18443:18443"
+      - "18444:18444"
+      - "28332:28332"
+      - "28333:28333"
     volumes:
       - ./:/app
-    # Use the same network as default; use docker compose exec ssv ... to run commands
+      - bitcoin-data:/data/bitcoin
+    tty: true
+    stdin_open: true
 
 volumes:
   bitcoin-data:
     driver: local
-

@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# liq_demo_docker.sh — CSV liquidation skeleton (docker compose)
+# liq_demo_docker.sh — CSV liquidation skeleton (single SSV container)
 
-BTC="docker compose exec -T bitcoin bitcoin-cli -regtest"
+BITCOIN_RPCUSER=${BITCOIN_RPCUSER:-ssv}
+BITCOIN_RPCPASS=${BITCOIN_RPCPASS:-ssvpass}
+BITCOIN_RPCPORT=${BITCOIN_RPCPORT:-18443}
+
+BTC="docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=$BITCOIN_RPCUSER -rpcpassword=$BITCOIN_RPCPASS -rpcconnect=127.0.0.1 -rpcport=$BITCOIN_RPCPORT"
 SSV="docker compose exec -T ssv"
 
 CSV=144
@@ -56,4 +60,4 @@ $SSV ssv finalize \
   --control "$CTRL_HEX"
 
 echo "Done. Inspect liq.final.psbt / liq.final.tx and broadcast as desired."
-echo "Broadcast with: docker compose exec -T bitcoin bitcoin-cli -regtest sendrawtransaction $(cat liq.final.tx)"
+echo "Broadcast with: docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=$BITCOIN_RPCUSER -rpcpassword=$BITCOIN_RPCPASS -rpcconnect=127.0.0.1 -rpcport=$BITCOIN_RPCPORT sendrawtransaction $(cat liq.final.tx)"

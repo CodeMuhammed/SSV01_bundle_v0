@@ -4,8 +4,8 @@ NET ?= regtest
 
 help:
 	@echo "SSV demos (docker, regtest)"
-	@echo "  make docker-up    # build and start bitcoind+ssv containers"
-	@echo "  make docker-logs  # tail bitcoind logs"
+	@echo "  make docker-up    # build and start the all-in-one SSV container"
+	@echo "  make docker-logs  # tail embedded bitcoind logs"
 	@echo "  make demo-close   # run CLOSE+REPAY skeleton (dockerized; prompts to attach RGB anchor)"
 	@echo "  make demo-liq     # run CSV LIQUIDATE skeleton (dockerized)"
 	@echo "  make docker-down  # stop and remove containers"
@@ -24,7 +24,7 @@ docker-down:
 	docker compose down -v
 
 docker-logs:
-	docker compose logs -f bitcoin
+	docker compose logs -f ssv
 
 test:
 	pytest -q

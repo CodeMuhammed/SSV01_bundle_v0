@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+__pycache__/
+*.pyc
+.pytest_cache
+dist
+build
+.mypy_cache
+.ruff_cache
+*.egg-info
+docker/entrypoint.sh~
+examples/*.psbt
+examples/*.tx
+examples/*.json
+examples/*.txt

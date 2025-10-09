@@ -170,16 +170,16 @@ Use `getdescriptorinfo` to canonicalize and checksum before calling `importdescr
 
 ```
 # Internal key for tr()
-VAULT_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getnewaddress "" bech32m)
-INTERNAL_PUB=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | jq -r .pubkey)
+VAULT_ADDR=$(docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1 -rpcwallet=vault getnewaddress "" bech32m)
+INTERNAL_PUB=$(docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1 -rpcwallet=vault getaddressinfo "$VAULT_ADDR" | jq -r .pubkey)
 
 # Borrower / provider x-only keys for tapscript
-BORR_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getnewaddress "" bech32m)
-BORR_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | jq -r .pubkey)
+BORR_ADDR=$(docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1 -rpcwallet=borrower getnewaddress "" bech32m)
+BORR_COMP=$(docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1 -rpcwallet=borrower getaddressinfo "$BORR_ADDR" | jq -r .pubkey)
 pk_b=${BORR_COMP:2}
 
-PROV_ADDR=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getnewaddress "" bech32m)
-PROV_COMP=$(docker compose exec -T bitcoin bitcoin-cli -regtest -rpcwallet=provider getaddressinfo "$PROV_ADDR" | jq -r .pubkey)
+PROV_ADDR=$(docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1 -rpcwallet=provider getnewaddress "" bech32m)
+PROV_COMP=$(docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1 -rpcwallet=provider getaddressinfo "$PROV_ADDR" | jq -r .pubkey)
 pk_p=${PROV_COMP:2}
 ```
 
@@ -211,6 +211,86 @@ make demo-liq     # provider liquidation after CSV
 ```
 
 They build the descriptor, fund the Taproot vault, guide you through the RGB anchor insertion, and show how to finalize both borrower and provider PSBTs using the CLI commands described above.
+
+## Local setup guide — macOS (Apple Silicon, e.g. M4 Pro)
+
+You can run SSV natively on Apple Silicon without Rosetta. The steps below assume a fresh macOS environment.
+
+### 1. Install command line tools & Homebrew
+```
+xcode-select --install
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
+```
+
+### 2. Install foundational packages
+```
+brew install python@3.11 pipx openssl pkg-config libffi libpq git
+pipx ensurepath
+```
+
+Python 3.11 works well with coincurve and python-bitcointx; adjust if your environment mandates a different version.
+
+### 3. Clone the repository and create a virtual environment
+```
+git clone https://github.com/<your-org>/SSV01_bundle_v0.git
+cd SSV01_bundle_v0
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+```
+
+### 4. Install SSV with development extras
+```
+pip install -e ".[dev]"
+```
+
+This pulls in:
+- `coincurve` (compiled against system libsecp256k1 via wheels)
+- `python-bitcointx`
+- `pytest`, `pytest-cov`
+- CLI dependencies for RGB demos
+
+If the coincurve wheel is not available for your macOS version, install build prerequisites:
+```
+brew install libsecp256k1 rust
+CFLAGS="-I/opt/homebrew/include" LDFLAGS="-L/opt/homebrew/lib" pip install coincurve --no-binary coincurve
+```
+
+### 5. Verify installation
+
+Run unit tests:
+```
+pytest -q
+```
+
+Validate the CLI is on your PATH inside the venv:
+```
+ssv --help
+```
+
+### 6. Optional: Dockerized environment
+
+The repo ships with an all-in-one docker-compose stack (bitcoind + rgb + SSV in one container). On Apple Silicon:
+```
+brew install docker docker-compose
+open --background -a Docker
+make docker-up
+```
+
+Then run the demos:
+```
+make demo-close
+make demo-liq
+```
+
+All containers use Apple Silicon images where available; Docker Desktop will emulate x86 layers automatically when necessary.
+
+### 7. Helpful macOS tweaks
+- Add `alias ssv="source /path/to/SSV01_bundle_v0/.venv/bin/activate && ssv"` to your shell profile for quick CLI access.
+- Use `pipx install poetry` or `pipx install rye` if you prefer alternate virtualenv managers.
+- For repeated RGB experiments, pin your rust toolchain (`rustup default stable`) so that rgb-cli builds stay consistent.
 - Use `h` when building the tapscript and keep `s` for CLOSE (borrower path).
 
 
@@ -252,26 +332,39 @@ Developer notes (modules and helpers)
 
 
 
-Dockerized setup (reproducible)
+Dockerized setup (all-in-one)
 
-If you prefer to run everything in containers (bitcoind + SSV + rgb CLI), use the provided Dockerfile and docker-compose.yml.
+The Dockerfile ships a single image that already contains bitcoind (regtest), rgb v0.12, and the SSV CLI. `docker-compose.yml` simply builds that image and keeps it running with bitcoind in the background.
 
 Quick start
-- Build and start: `make docker-up`
+- Build & launch: `make docker-up`
+- (Optional) interactive shell: `docker compose exec -it ssv bash`
 - Tail bitcoind logs: `make docker-logs`
-- Run CLOSE+REPAY demo (dockerized helpers):
-  - `bash examples/close_repay_demo_docker.sh`
-  - The script uses:
-    - `docker compose exec bitcoin bitcoin-cli ...` for Core RPC calls, and
-    - `docker compose exec ssv ssv ...` / `docker compose exec ssv python ...` for SSV and helpers.
-- Run CSV LIQUIDATE demo (dockerized):
-  - `bash examples/liq_demo_docker.sh`
-- Stop containers: `make docker-down`
+- Run demos:
+  - CLOSE+REPAY: `bash examples/close_repay_demo_docker.sh`
+  - CSV LIQUIDATE: `bash examples/liq_demo_docker.sh`
+- Tear down: `make docker-down`
+
+Prefer plain `docker` without compose? Build the image and run it directly:
+```
+docker build -t ssv-toolkit .
+docker run --rm -it -p 18443:18443 -p 18444:18444 -p 28332:28332 -p 28333:28333 \
+  -v "$(pwd)":/app -v ssv-bitcoin-data:/data/bitcoin ssv-toolkit bash
+```
+The entrypoint starts bitcoind automatically; you land in a shell (or override `bash` with your own command).
+
+Common helper aliases once the container is up:
+```
+BTC='docker compose exec -T ssv bitcoin-cli -regtest -rpcuser=ssv -rpcpassword=ssvpass -rpcport=18443 -rpcconnect=127.0.0.1'
+SSV='docker compose exec -T ssv'
+```
+
+`$BTC …` gives you Core RPC access, while `$SSV …` runs Python/CLI commands in the same environment (rgb included). The demo scripts rely on these defaults.
 
 Notes
-- The `ssv` container image includes Python deps and the `rgb` CLI pinned to v0.12 (installed via Cargo) so you can attach RGB anchors inside the same container.
-- The `bitcoin` service uses regtest with txindex and default RPC auth (see docker-compose.yml). Adjust RPC options as needed.
-- Example scripts still require manual signatures and a control block obtained from your signing wallet.
+- Credentials are configurable via environment variables (`BITCOIN_RPCUSER`, `BITCOIN_RPCPASS`, …) but default to `ssv` / `ssvpass`. See `docker-compose.yml` for all exposed knobs.
+- Data lives under `/data/bitcoin` inside the container and is persisted via the `bitcoin-data` named volume.
+- The bundled rgb CLI is pinned via Cargo to ensure reproducible TapRet behaviour.
 
 
 Development and tests
