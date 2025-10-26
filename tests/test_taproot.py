@@ -52,3 +52,10 @@ def test_compute_output_key_xonly_rejects_invalid_lengths():
         compute_output_key_xonly(b'\x00' * 32, b'\x11' * 31, [])
     with pytest.raises(ValueError, match='merkle node'):
         compute_output_key_xonly(b'\x00' * 32, b'\x11' * 32, [b'\x22'])
+
+
+def test_scriptpubkey_from_xonly_validates_length():
+    from ssv.taproot import scriptpubkey_from_xonly
+
+    with pytest.raises(ValueError, match='32 bytes'):
+        scriptpubkey_from_xonly(b'\x01' * 31)

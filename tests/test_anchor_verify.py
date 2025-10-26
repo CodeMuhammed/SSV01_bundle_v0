@@ -55,19 +55,20 @@ def test_anchor_verify_positive():
     except Exception:
         pytest.skip('PSBT implementation rejected minimal unsigned tx')
 
-        with tempfile.TemporaryDirectory() as td:
-            p = os.path.join(td, 't.psbt')
-            with open(p, 'wt') as f:
-                f.write(psbt.to_base64())
-            out = run_cli(['anchor-verify', '--psbt-in', p, '--index', '0', '--spk', spk.hex(), '--value', '12345', '--json'])
-        import json
-        data = json.loads(out)
-        assert data['ok'] is True
-        assert data['index'] == 0
-        assert data['expected_spk'] == (b'5120' + xonly).hex()
-        assert data['actual_spk'] == (b'5120' + xonly).hex()
-        assert data['expected_value'] == 12345
-        assert data['actual_value'] == 12345
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, 't.psbt')
+        with open(p, 'wt') as f:
+            f.write(psbt.to_base64())
+        out = run_cli(['anchor-verify', '--psbt-in', p, '--index', '0', '--spk', spk.hex(), '--value', '12345', '--json'])
+    import json
+    data = json.loads(out)
+    assert data['ok'] is True
+    assert data['index'] == 0
+    expected_spk_hex = spk.hex()
+    assert data['expected_spk'] == expected_spk_hex
+    assert data['actual_spk'] == expected_spk_hex
+    assert data['expected_value'] == 12345
+    assert data['actual_value'] == 12345
 
 
 @pytest.mark.skipif(not _psbt_available(), reason='python-bitcointx PSBT API not available')
